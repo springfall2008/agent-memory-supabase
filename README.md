@@ -50,6 +50,9 @@ The server exposes 22 tools, plus 13 `admin_` tools that only admins see (see [A
 thread tools (see [Threads and sessions](#threads-and-sessions)). The memory tools are `list_scopes`, `store`, `store_batch`, `search`, `recall`, `find_related`,
 `list_recent`, `update`, `delete`, `stats` and `prune`. They match the original server, plus a `scope` argument on the
 write tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
+Its `tags` filter keeps memories with at least one of the tags given; `tags_all` keeps only those with every one, so a
+query such as "open work in this repo" (`tags_all: ["repo:<name>", "status:open"]`) needs no client-side filtering.
+The two can be combined.
 Delete and prune are soft; rows are purged after 30 days.
 
 ## Threads and sessions

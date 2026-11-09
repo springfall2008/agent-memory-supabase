@@ -92,6 +92,8 @@ export interface UpdateRequest {
 export interface SearchFilters {
   category?: MemoryCategory;
   tags?: string[];
+  /** Every one of these tags must be present (tags matches any). */
+  tagsAll?: string[];
   after?: string;
   before?: string;
   limit?: number;

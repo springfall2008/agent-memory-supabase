@@ -25,6 +25,7 @@ const scopesSchema = z.array(z.string()).optional().describe('Scopes to search; 
 const filtersShape = {
   category: categorySchema.optional().describe('Filter by category'),
   tags: z.array(z.string()).optional().describe('Filter: memory must have at least one of these tags'),
+  tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
   after: z.string().optional().describe('Filter: created after this ISO 8601 date'),
   before: z.string().optional().describe('Filter: created before this ISO 8601 date'),
   limit: z.number().optional().describe('Max results to return (default 10)'),
@@ -122,6 +123,7 @@ export function handleSearch(store: MemoryStore) {
     mode?: SearchMode;
     category?: MemoryCategory;
     tags?: string[];
+    tags_all?: string[];
     after?: string;
     before?: string;
     limit?: number;
@@ -131,6 +133,7 @@ export function handleSearch(store: MemoryStore) {
       const results = await store.search(args.query, args.mode ?? 'hybrid', {
         category: args.category,
         tags: args.tags,
+        tagsAll: args.tags_all,
         after: args.after,
         before: args.before,
         limit: args.limit,

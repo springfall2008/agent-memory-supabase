@@ -228,6 +228,20 @@ Deno.test('soft-deleted memories are invisible to every read', () =>
     await assertRejects(() => rw.findRelated(gone.id, 5), Error, `Memory ${gone.id} not found`);
   }));
 
+Deno.test('tagsAll requires every tag, and combines with tags', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const a = await s.store(w.alpha.name, req('okapi status', ['status:open', 'owner:me']));
+    const b = await s.store(w.alpha.name, req('okapi status two', ['status:done', 'owner:me']));
+    await s.store(w.alpha.name, req('okapi status three', ['status:open']));
+    const ids = async (f: Parameters<PgMemoryStore['search']>[2]) =>
+      (await s.search('okapi status', 'keyword', f)).map((r) => r.memory.id).sort();
+    assertEquals(await ids({ tagsAll: ['status:open', 'owner:me'] }), [a.id]);
+    assertEquals(await ids({ tags: ['status:open', 'status:done'], tagsAll: ['owner:me'] }), [a.id, b.id].sort());
+    assertEquals(await ids({ tagsAll: ['owner:nobody'] }), []);
+    assertEquals((await ids({ tagsAll: [] })).length, 3);
+  }));
+
 Deno.test('empty tags filter means no filter', () =>
   withWorld(async (w, _a, mk) => {
     const [s] = mk(w.rw.id);

@@ -357,6 +357,7 @@ export class PgMemoryStore implements MemoryStore {
         select * from agent_memory.search_memories(
           ${query}::text, ${embArg}::extensions.vector, ${effectiveMode}::text, ${scopeIds}::uuid[],
           ${f.category ?? null}::text, ${f.tags?.length ? tx.array(f.tags) : null}::text[],
+          ${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[],
           ${f.after ?? null}::timestamptz, ${f.before ?? null}::timestamptz,
           ${limit * OVER_FETCH_FACTOR}::int)`;
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);

@@ -169,6 +169,30 @@ Deno.test('non-empty scopes are passed through', async () => {
   assertEquals((calls.search[0][2] as SearchFilters).scopes, ['a']);
 });
 
+Deno.test('handleSearch passes tags and tags_all through as separate filters', async () => {
+  const { store, calls } = mockStore();
+  await handleSearch(store)({ query: 'q', tags: ['a', 'b'], tags_all: ['c', 'd'] });
+  const f = calls.search[0][2] as SearchFilters;
+  assertEquals(f.tags, ['a', 'b']);
+  assertEquals(f.tagsAll, ['c', 'd']);
+});
+
+Deno.test('the registered search tool accepts tags_all', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered =
+    (server as unknown as { _registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }> })
+      ._registeredTools;
+  const parsed = registered.search.inputSchema.parse({ query: 'q', tags: ['a'], tags_all: ['b', 'c'] }) as Record<
+    string,
+    unknown
+  >;
+  assertEquals(parsed.tags_all, ['b', 'c']);
+  assertEquals(parsed.tags, ['a']);
+});
+
 Deno.test('handleUpdate with only tags passes only tags', async () => {
   const { store, calls } = mockStore();
   await handleUpdate(store)({ id: 'i', tags: ['x'] });

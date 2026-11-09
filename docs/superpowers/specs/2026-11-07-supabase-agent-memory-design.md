@@ -169,7 +169,8 @@ Port the original behaviour onto Postgres:
 
 - **Hybrid** = Postgres full-text rank + pgvector cosine, fused with RRF (k = 60), with over-fetch then filter.
 - **Keyword** and **semantic** modes.
-- Filters: category, tags (any-of), before/after, limit, scopes.
+- Filters: category, tags (any-of), tags_all (every one; added later as a 10-argument `search_memories`), before/after,
+  limit, scopes.
 - **Temporal decay**: half-life 30 days default (configurable), the original importance multiplier (access
   frequency and recency stretch the half-life, range 1–3×), and the `evergreen` / `never-forget` exemption.
   Re-sort after decay.
