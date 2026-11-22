@@ -62,7 +62,9 @@ A new table, added by a new migration (never by editing an old one):
 - A memory has at most 100 **outgoing** links (rows where it is `from_id`). Incoming links are not capped at write time.
   Capping the `from` side keeps the limit in the hands of whoever can write that memory, so nobody can fill another
   scope's memory with incoming links to block its owners, and the "too many links" error cannot hint at links the
-  caller can't see. Reads stay bounded anyway: results show at most 10 links per memory and `neighbours` returns at
+  caller can't see. A `relates-to` link is stored from whichever end the caller can write, so someone who can only read a
+  memory's scope can never charge that memory's cap. The one accepted leak: a writer of a memory's scope who hits the cap
+  learns the memory has 100 outgoing links, and that count may include links to memories they cannot read. Reads stay bounded anyway: results show at most 10 links per memory and `neighbours` returns at
   most 100 memories. The cap lives in `_shared/limits.ts` and the SQL function enforces it. (Claude's call)
 
 **Visibility.** A member sees a link only if they can read both ends, and only while neither memory is soft-deleted.

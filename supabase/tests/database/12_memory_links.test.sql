@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(39);
+select plan(41);
 
 -- Fixtures (as postgres). Members: w writes s1+s2; a writes s1, reads s2; b reads s1, writes s2; r reads s1; o has no grants.
 -- Memories: m1, m2, m6 and 100 extras ('bbbbbbbb-...') in s1; m3 in s2. m6 already has 100 outgoing links.
@@ -118,6 +118,12 @@ select lives_ok($$select agent_memory.relate_memories('aaaaaaaa-0000-0000-0000-0
   'relates-to needs write on either end');
 select lives_ok($$select agent_memory.relate_memories('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000001', 'depends-on')$$,
   'depends-on from a writable scope to a readable memory works');
+-- b cannot write s1, so a relates-to given as m6 -> m3 must not be charged to m6's outgoing cap (m6 is at 100)
+select lives_ok($$select agent_memory.relate_memories('aaaaaaaa-0000-0000-0000-000000000006', 'aaaaaaaa-0000-0000-0000-000000000003', 'relates-to')$$,
+  'a reader of m6''s scope cannot fill m6''s outgoing cap through relates-to');
+select is((select count(*) from agent_memory.memory_links
+  where from_id = 'aaaaaaaa-0000-0000-0000-000000000003' and to_id = 'aaaaaaaa-0000-0000-0000-000000000006' and type = 'relates-to'),
+  1::bigint, 'the relates-to row is stored from the end the caller can write');
 reset role;
 
 -- As r (reads s1) and o (no grants)

@@ -42,6 +42,7 @@ declare
   v_to_scope uuid;
   v_name text;
   v_n int;
+  v_swap uuid;
 begin
   if p_type is null or p_type not in ('relates-to', 'supersedes', 'derived-from', 'depends-on') then
     raise exception 'Invalid link type ''%''', p_type;
@@ -73,6 +74,17 @@ begin
       select s.name into v_name from agent_memory.scopes s where s.id = v_from_scope;
       raise exception 'No write access to scope ''%''', v_name;
     end if;
+  end if;
+
+  -- relates-to has no direction, so store it from an end the caller can write. Otherwise anyone who can only read the
+  -- from memory's scope could fill that memory's outgoing cap and block its owners.
+  if p_type = 'relates-to' and not agent_memory.can_write(v_from_scope) then
+    v_swap := p_from;
+    p_from := p_to;
+    p_to := v_swap;
+    v_swap := v_from_scope;
+    v_from_scope := v_to_scope;
+    v_to_scope := v_swap;
   end if;
 
   -- Repeating a link that already exists (the reversed relates-to pair included) is a silent no-op, even at the cap.
