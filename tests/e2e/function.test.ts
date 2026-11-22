@@ -69,9 +69,9 @@ Deno.test('edge function end-to-end over MCP', async () => {
     const ro = await issue(world.ro.id);
     const none = await issue(world.none.id);
 
-    await t('tools/list returns 25 tools', async () => {
+    await t('tools/list returns 28 tools', async () => {
       const c = await open(rw.token);
-      assertEquals((await c.listTools()).tools.length, 25);
+      assertEquals((await c.listTools()).tools.length, 28);
     });
 
     await t('store, search, update, find_related, delete as rw', async () => {
@@ -178,6 +178,35 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(denied.isError, true);
     });
 
+    await t('claim a memory, see the claim in search and my_claims, release it', async () => {
+      const c = await open(rw.token);
+      const m = parse(
+        await c.callTool({
+          name: 'store',
+          arguments: { scope: world.alpha.name, content: 'tapir ticket to pick up', category: 'learning', tags: [] },
+        }),
+      );
+      const claimed = parse(
+        await c.callTool({
+          name: 'claim_memory',
+          arguments: { memory_id: m.id, description: 'picking it up', indefinite: true, session_label: 'e2e' },
+        }),
+      );
+      assertEquals(claimed, { claimed: true, until: null });
+      const found = parse(await c.callTool({ name: 'search', arguments: { query: 'tapir ticket' } }));
+      const hit = found.results.find((r: { memory: { id: string } }) => r.memory.id === m.id);
+      assertEquals(hit.memory.claim.mine, true);
+      assertEquals(hit.memory.claim.description, 'picking it up');
+      assertEquals(hit.memory.claim.session.label, 'e2e');
+      const mine = parse(await c.callTool({ name: 'my_claims', arguments: {} }));
+      assert(mine.claims.some((x: { memory: { id: string } }) => x.memory.id === m.id), 'my_claims lists it');
+      const released = parse(await c.callTool({ name: 'release_claim', arguments: { memory_id: m.id } }));
+      assertEquals(released, { released: true });
+      const again = parse(await c.callTool({ name: 'search', arguments: { query: 'tapir ticket' } }));
+      const after = again.results.find((r: { memory: { id: string } }) => r.memory.id === m.id);
+      assertEquals('claim' in after.memory, false);
+    });
+
     await t('spoofing a member id changes nothing', async () => {
       const c = await open(rw.token, { 'X-Member-Id': world.ro.id });
       const m = parse(
@@ -227,22 +256,22 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(parse(await c.callTool({ name: 'list_scopes', arguments: {} })), { count: 0, scopes: [] });
     });
 
-    await t('admin token sees 38 tools; non-admin and bot see the 25 non-admin tools', async () => {
+    await t('admin token sees 41 tools; non-admin and bot see the 28 non-admin tools', async () => {
       const [a] = await sql`
         insert into agent_memory.members (display_name, kind) values (${adminName}, 'human') returning id`;
       await setAdmin(sql, adminName, true);
       const admin = await issue(a.id);
       const names = async (tok: string) => (await (await open(tok)).listTools()).tools.map((x) => x.name);
       const adminTools = await names(admin.token);
-      assertEquals(adminTools.length, 38);
+      assertEquals(adminTools.length, 41);
       assertEquals(adminTools.filter((n) => n.startsWith('admin_')).length, 13);
       const base = await names(rw.token);
-      assertEquals(base.length, 25);
+      assertEquals(base.length, 28);
       assert(!base.some((n) => n.startsWith('admin_')));
       assertEquals(await names(none.token), base);
       const bot = await issue(world.bw.id);
       assertEquals(await names(bot.token), base);
-      assertEquals(adminTools.slice(0, 25), base);
+      assertEquals(adminTools.slice(0, 28), base);
     });
 
     await t('two clients on one token trade a question and answer', async () => {
@@ -336,7 +365,7 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(scopes.count, 1);
       assertEquals(scopes.scopes[0].scope, world.alpha.name);
       assertEquals(scopes.scopes[0].access, 'read');
-      assertEquals((await nc.listTools()).tools.length, 25);
+      assertEquals((await nc.listTools()).tools.length, 28);
 
       await ok('admin_deactivate_member', { name: newName });
       const r = await post({ authorization: `Bearer ${issued.token}` }, '', {

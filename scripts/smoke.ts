@@ -52,6 +52,9 @@ const BASE_TOOLS = [
   'relate_memories',
   'unrelate_memories',
   'neighbours',
+  'claim_memory',
+  'release_claim',
+  'my_claims',
   'update',
   'delete',
   'stats',
@@ -159,6 +162,26 @@ await step('neighbours', async () => {
 await step('unrelate_memories', async () => {
   const r = await call('unrelate_memories', { from_id: id, to_id: sibling, type: 'relates-to' });
   ok(r.unrelated === true, 'link not removed');
+});
+await step('claim_memory', async () => {
+  const r = await call('claim_memory', {
+    memory_id: id,
+    description: 'smoke test claim',
+    minutes: 5,
+    session_label: 'smoke',
+  });
+  ok(r.claimed === true && typeof r.until === 'string', 'claim not made');
+});
+await step('my_claims', async () => {
+  const r = await call('my_claims', { scopes: [scope] });
+  ok(r.claims.some((c: Json) => c.memory.id === id && c.session?.label === 'smoke'), 'claim not listed');
+  const s = await call('search', { query: 'quokka eucalyptus', scopes: [scope] });
+  const hit = s.results.find((x: Json) => x.memory.id === id);
+  ok(hit?.memory.claim?.mine === true, 'search result does not show the claim');
+});
+await step('release_claim', async () => {
+  const r = await call('release_claim', { memory_id: id });
+  ok(r.released === true, 'claim not released');
 });
 await step('list_recent', async () => {
   const r = await call('list_recent', { limit: 10, scopes: [scope] });
