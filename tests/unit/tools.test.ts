@@ -56,6 +56,9 @@ function mockStore(
       rec('browse', f);
       return Promise.resolve({ memories: opts.browsePage ?? [], hasMore: opts.browseHasMore ?? false });
     },
+    relate: () => Promise.resolve(),
+    unrelate: () => Promise.resolve(false),
+    neighbours: () => Promise.resolve({ neighbours: [], truncated: false }),
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
       return Promise.resolve([]);

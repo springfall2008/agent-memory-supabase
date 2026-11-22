@@ -36,6 +36,22 @@ export function checkBrowseLimit(n: number): void {
   }
 }
 
+/** Memory links: a memory has at most this many outgoing links (mirrored by the SQL function relate_memories). */
+export const MEMORY_LINKS_OUT_MAX = 100;
+/** Results show at most this many links per memory, plus a count of the rest. */
+export const LINKS_SHOWN_MAX = 10;
+export const NEIGHBOURS_MAX_DEPTH = 3;
+export const NEIGHBOURS_DEFAULT_DEPTH = 1;
+/** `neighbours` returns at most this many memories. */
+export const NEIGHBOURS_MAX_RESULTS = 100;
+
+/** A neighbour walk goes 1..NEIGHBOURS_MAX_DEPTH hops. */
+export function checkDepth(n: number): void {
+  if (!Number.isInteger(n) || n < 1 || n > NEIGHBOURS_MAX_DEPTH) {
+    throw new StoreError(`depth must be between 1 and ${NEIGHBOURS_MAX_DEPTH}`);
+  }
+}
+
 /** A browse offset is a non-negative integer. */
 export function checkOffset(n: number): void {
   if (!Number.isInteger(n) || n < 0) {

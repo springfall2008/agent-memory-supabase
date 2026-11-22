@@ -5,23 +5,30 @@ import { applyDecay, importanceMultiplier, isEvergreen, parseDecayHalfLife } fro
 import {
   checkBrowseLimit,
   checkContent,
+  checkDepth,
   checkLimit,
   checkOffset,
   DEFAULT_LIMIT,
+  NEIGHBOURS_DEFAULT_DEPTH,
+  NEIGHBOURS_MAX_RESULTS,
   OVER_FETCH_FACTOR,
   PRUNE_MAX_DORMANT_DAYS_DEFAULT,
   PRUNE_MIN_STRENGTH_DEFAULT,
   STORE_BATCH_MAX,
   StoreError,
 } from './limits.ts';
+import { LINK_TYPES } from './types.ts';
 import type {
   BrowseFilters,
   BrowsePage,
   Embedder,
+  LinkType,
   Memory,
   MemoryCategory,
   MemoryStats,
   MemoryStore,
+  NeighbourOptions,
+  NeighboursResult,
   PruneOptions,
   PruneResult,
   ScopeInfo,
@@ -423,6 +430,54 @@ export class PgMemoryStore implements MemoryStore {
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
       return results;
+    });
+  }
+
+  async relate(from: string, to: string, type: LinkType): Promise<void> {
+    if (!isUuid(from)) throw notFoundMemory(from);
+    if (!isUuid(to)) throw notFoundMemory(to);
+    await this.run(async (tx) => {
+      await tx`select agent_memory.relate_memories(${from}::uuid, ${to}::uuid, ${type}::text)`;
+    });
+  }
+
+  async unrelate(from: string, to: string, type: LinkType): Promise<boolean> {
+    if (!isUuid(from)) throw notFoundMemory(from);
+    if (!isUuid(to)) throw notFoundMemory(to);
+    return await this.run(async (tx) => {
+      const [r] = await tx<Row[]>`
+        select agent_memory.unrelate_memories(${from}::uuid, ${to}::uuid, ${type}::text) as removed`;
+      return r.removed === true;
+    });
+  }
+
+  /** Follows visible links breadth-first from one memory. Navigation, not relevance: it does not count as an access. */
+  async neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult> {
+    if (!isUuid(id)) throw notFoundMemory(id);
+    const depth = o.depth ?? NEIGHBOURS_DEFAULT_DEPTH;
+    checkDepth(depth);
+    const direction = o.direction ?? 'both';
+    if (!['out', 'in', 'both'].includes(direction)) throw new StoreError('direction must be out, in or both');
+    for (const t of o.types ?? []) {
+      if (!LINK_TYPES.includes(t)) throw new StoreError(`Invalid link type '${t}'`);
+    }
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, o.scopes);
+      const start = await tx<Row[]>`select id from agent_memory.memory_view where id = ${id}::uuid`;
+      if (start.length === 0) throw notFoundMemory(id);
+      const rows = await tx<Row[]>`
+        select * from agent_memory.memory_neighbours(
+          ${id}::uuid, ${direction}::text, ${o.types?.length ? tx.array(o.types) : null}::text[], ${depth}::int,
+          ${scopeIds}::uuid[], ${NEIGHBOURS_MAX_RESULTS + 1}::int)`;
+      const page = rows.slice(0, NEIGHBOURS_MAX_RESULTS);
+      if (page.length === 0) return { neighbours: [], truncated: false };
+      const memories = await tx<Row[]>`
+        select * from agent_memory.memory_view where id = any(${page.map((r) => r.id)}::uuid[])`;
+      const byId = new Map(memories.map((m) => [m.id as string, rowToMemory(m)]));
+      return {
+        neighbours: page.map((r) => ({ memory: byId.get(r.id)!, path: r.path })),
+        truncated: rows.length > NEIGHBOURS_MAX_RESULTS,
+      };
     });
   }
 

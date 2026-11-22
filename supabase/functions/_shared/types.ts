@@ -34,6 +34,44 @@ export interface Memory {
   updatedSession?: string;
   /** Linked threads; set by recall only where links exist. */
   threads?: LinkedThread[];
+  /** Visible links to other memories (at most LINKS_SHOWN_MAX); absent when there are none. */
+  links?: MemoryLink[];
+  /** How many further links exist beyond `links`. */
+  moreLinks?: number;
+  /** True when a visible `supersedes` link points at this memory. */
+  superseded?: true;
+}
+
+// ── Memory links ───────────────────────────────────────────────────
+
+export const LINK_TYPES = ['relates-to', 'supersedes', 'derived-from', 'depends-on'] as const;
+export type LinkType = (typeof LINK_TYPES)[number];
+/** `relates-to` has no direction and always reads as `both`. */
+export type LinkDirection = 'out' | 'in' | 'both';
+
+export interface MemoryLink {
+  type: LinkType;
+  direction: LinkDirection;
+  /** The memory at the other end (for a walk step: the memory that step reached). */
+  memoryId: string;
+}
+
+export interface NeighbourOptions {
+  direction?: LinkDirection;
+  types?: LinkType[];
+  depth?: number;
+  scopes?: string[];
+}
+
+export interface Neighbour {
+  memory: Memory;
+  path: MemoryLink[];
+}
+
+export interface NeighboursResult {
+  neighbours: Neighbour[];
+  /** True when the result was cut at the maximum number of memories. */
+  truncated: boolean;
 }
 
 export interface SearchResult {
@@ -129,6 +167,9 @@ export interface MemoryStore {
   /** Unranked, newest-first listing of everything matching the filters. Does not count as an access. */
   browse(f: BrowseFilters): Promise<BrowsePage>;
   findRelated(id: string, limit: number, scopes?: string[]): Promise<SearchResult[]>;
+  relate(from: string, to: string, type: LinkType): Promise<void>;
+  unrelate(from: string, to: string, type: LinkType): Promise<boolean>;
+  neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;
   delete(id: string): Promise<void>;
