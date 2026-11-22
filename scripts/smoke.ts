@@ -49,6 +49,9 @@ const BASE_TOOLS = [
   'recall',
   'find_related',
   'list_recent',
+  'relate_memories',
+  'unrelate_memories',
+  'neighbours',
   'update',
   'delete',
   'stats',
@@ -141,6 +144,21 @@ await step('recall', async () => {
 await step('find_related', async () => {
   const r = await call('find_related', { memory_id: id, scopes: [scope] });
   ok(r.results.some((x: Json) => x.memory.id === sibling), 'sibling not related');
+});
+await step('relate_memories', async () => {
+  const r = await call('relate_memories', { from_id: id, to_id: sibling, type: 'relates-to' });
+  ok(r.related === true, 'link not created');
+});
+await step('neighbours', async () => {
+  const r = await call('neighbours', { memory_id: id });
+  ok(r.results.some((x: Json) => x.memory.id === sibling), 'linked memory not reached');
+  const s = await call('search', { query: 'quokka eucalyptus', scopes: [scope] });
+  const hit = s.results.find((x: Json) => x.memory.id === id);
+  ok(hit?.memory.links?.some((l: Json) => l.memoryId === sibling), 'search result does not show the link');
+});
+await step('unrelate_memories', async () => {
+  const r = await call('unrelate_memories', { from_id: id, to_id: sibling, type: 'relates-to' });
+  ok(r.unrelated === true, 'link not removed');
 });
 await step('list_recent', async () => {
   const r = await call('list_recent', { limit: 10, scopes: [scope] });

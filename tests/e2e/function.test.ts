@@ -69,9 +69,9 @@ Deno.test('edge function end-to-end over MCP', async () => {
     const ro = await issue(world.ro.id);
     const none = await issue(world.none.id);
 
-    await t('tools/list returns 22 tools', async () => {
+    await t('tools/list returns 25 tools', async () => {
       const c = await open(rw.token);
-      assertEquals((await c.listTools()).tools.length, 22);
+      assertEquals((await c.listTools()).tools.length, 25);
     });
 
     await t('store, search, update, find_related, delete as rw', async () => {
@@ -171,14 +171,14 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(parse(await c.callTool({ name: 'list_scopes', arguments: {} })), { count: 0, scopes: [] });
     });
 
-    await t('admin token sees 35 tools; non-admin and bot see the 22 non-admin tools', async () => {
+    await t('admin token sees 38 tools; non-admin and bot see the 25 non-admin tools', async () => {
       const [a] = await sql`
         insert into agent_memory.members (display_name, kind) values (${adminName}, 'human') returning id`;
       await setAdmin(sql, adminName, true);
       const admin = await issue(a.id);
       const names = async (tok: string) => (await (await open(tok)).listTools()).tools.map((x) => x.name);
       const adminTools = await names(admin.token);
-      assertEquals(adminTools.length, 35);
+      assertEquals(adminTools.length, 38);
       assertEquals(adminTools.filter((n) => n.startsWith('admin_')).length, 13);
       const base = await names(rw.token);
       assertEquals(base.length, 22);
@@ -280,7 +280,7 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(scopes.count, 1);
       assertEquals(scopes.scopes[0].scope, world.alpha.name);
       assertEquals(scopes.scopes[0].access, 'read');
-      assertEquals((await nc.listTools()).tools.length, 22);
+      assertEquals((await nc.listTools()).tools.length, 25);
 
       await ok('admin_deactivate_member', { name: newName });
       const r = await post({ authorization: `Bearer ${issued.token}` }, '', {
