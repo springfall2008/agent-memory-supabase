@@ -140,3 +140,110 @@ Deno.test('unrelate returns whether a link was removed', () =>
     assertEquals(await s.unrelate(a.id, b.id, 'supersedes'), true);
     assertEquals(await s.unrelate(a.id, b.id, 'supersedes'), false);
   }));
+
+const pick = <T extends { id: string }>(list: T[], id: string): T => {
+  const found = list.find((m) => m.id === id);
+  if (!found) throw new Error(`memory ${id} missing from results`);
+  return found;
+};
+
+Deno.test('search, browse, findRelated and listRecent all carry links and the superseded flag', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const old = await s.store(w.alpha.name, req('quokka field notes old'));
+    const fresh = await s.store(w.alpha.name, req('quokka field notes new'));
+    const other = await s.store(w.alpha.name, req('quokka field notes other'));
+    await s.relate(fresh.id, old.id, 'supersedes');
+    await s.relate(fresh.id, other.id, 'relates-to');
+
+    const lists = {
+      search: (await s.search('quokka', 'keyword', {})).map((r) => r.memory),
+      browse: (await s.browse({})).memories,
+      findRelated: (await s.findRelated(other.id, 5)).map((r) => r.memory),
+      listRecent: await s.listRecent(10),
+    };
+    for (const [name, list] of Object.entries(lists)) {
+      const o = pick(list, old.id);
+      assertEquals(o.superseded, true, `${name}: old is flagged`);
+      assertEquals(o.links, [{ type: 'supersedes', direction: 'in', memoryId: fresh.id }], `${name}: old links`);
+      if (name !== 'findRelated') {
+        const f = pick(list, fresh.id);
+        assertEquals(f.superseded, undefined, `${name}: fresh is not flagged`);
+        assertEquals(f.links, [
+          { type: 'relates-to', direction: 'both', memoryId: other.id },
+          { type: 'supersedes', direction: 'out', memoryId: old.id },
+        ], `${name}: fresh links, newest first`);
+      }
+    }
+  }));
+
+Deno.test('a memory with 12 links shows 10 and moreLinks 2', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const hub = await s.store(w.alpha.name, req('hub memory'));
+    for (let i = 0; i < 12; i++) {
+      const t = await s.store(w.alpha.name, req(`spoke ${i}`));
+      await s.relate(hub.id, t.id, 'depends-on');
+    }
+    const h = pick(await s.listRecent(50), hub.id);
+    assertEquals(h.links?.length, 10);
+    assertEquals(h.moreLinks, 2);
+    assertEquals(h.superseded, undefined);
+  }));
+
+Deno.test('links the caller cannot see are not shown', () =>
+  withWorld(async (w, admin, mk) => {
+    await admin`insert into agent_memory.scope_grants (scope_id, member_id, access)
+      values (${w.beta.id}, ${w.rw.id}, 'write')`;
+    const [s] = mk(w.rw.id);
+    const [ro] = mk(w.ro.id);
+    const a = await s.store(w.alpha.name, req('alpha side'));
+    const c = await s.store(w.beta.name, req('beta side'));
+    await s.relate(a.id, c.id, 'supersedes');
+    assertEquals(pick(await s.listRecent(10), a.id).links?.length, 1);
+    const seen = pick(await ro.listRecent(10), a.id);
+    assertEquals('links' in seen, false);
+    assertEquals('superseded' in seen, false);
+  }));
+
+Deno.test('relates-to shows as both on both ends', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const a = await s.store(w.alpha.name, req('first'));
+    const b = await s.store(w.alpha.name, req('second'));
+    await s.relate(a.id, b.id, 'relates-to');
+    const all = await s.listRecent(10);
+    assertEquals(pick(all, a.id).links, [{ type: 'relates-to', direction: 'both', memoryId: b.id }]);
+    assertEquals(pick(all, b.id).links, [{ type: 'relates-to', direction: 'both', memoryId: a.id }]);
+  }));
+
+Deno.test('a result set of 20 memories gets each memory its own links', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const chain = [];
+    for (let i = 0; i < 20; i++) chain.push(await s.store(w.alpha.name, req(`chain ${i}`)));
+    for (let i = 0; i < 19; i++) await s.relate(chain[i].id, chain[i + 1].id, 'depends-on');
+    const all = await s.listRecent(20);
+    for (let i = 0; i < 20; i++) {
+      const expected = [];
+      if (i < 19) expected.push({ type: 'depends-on', direction: 'out', memoryId: chain[i + 1].id });
+      if (i > 0) expected.push({ type: 'depends-on', direction: 'in', memoryId: chain[i - 1].id });
+      const got = pick(all, chain[i].id).links ?? [];
+      const key = (l: { direction: string }) => l.direction;
+      assertEquals(
+        [...got].sort((x, y) => key(x).localeCompare(key(y))),
+        expected.sort((x, y) => key(x).localeCompare(key(y))),
+      );
+    }
+  }));
+
+Deno.test('soft-deleting the other end drops the link from results', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const a = await s.store(w.alpha.name, req('keeps'));
+    const b = await s.store(w.alpha.name, req('goes'));
+    await s.relate(a.id, b.id, 'derived-from');
+    assertEquals(pick(await s.listRecent(10), a.id).links?.length, 1);
+    await s.delete(b.id);
+    assertEquals('links' in pick(await s.listRecent(10), a.id), false);
+  }));

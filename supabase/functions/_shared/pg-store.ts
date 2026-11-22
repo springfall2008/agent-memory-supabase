@@ -9,6 +9,7 @@ import {
   checkLimit,
   checkOffset,
   DEFAULT_LIMIT,
+  LINKS_SHOWN_MAX,
   NEIGHBOURS_DEFAULT_DEPTH,
   NEIGHBOURS_MAX_RESULTS,
   OVER_FETCH_FACTOR,
@@ -22,6 +23,7 @@ import type {
   BrowseFilters,
   BrowsePage,
   Embedder,
+  LinkDirection,
   LinkType,
   Memory,
   MemoryCategory,
@@ -134,6 +136,40 @@ export class PgMemoryStore implements MemoryStore {
       const x = byId.get(r.memory.id);
       if (x?.created_session_label != null) r.memory.createdSession = x.created_session_label;
       if (x?.updated_session_label != null) r.memory.updatedSession = x.updated_session_label;
+    }
+  }
+
+  /**
+   * Adds each memory's visible links (at most LINKS_SHOWN_MAX, newest first), a count of the rest, and `superseded`
+   * when a visible `supersedes` link points at it. One query for the whole set, never one per memory. Memories with no
+   * visible links gain no key. created_at is read as text so links made in the same millisecond still order correctly.
+   */
+  private async addLinks(tx: Tx, memories: Memory[]): Promise<void> {
+    if (memories.length === 0) return;
+    const ids = [...new Set(memories.map((m) => m.id))];
+    const rows = await tx<Row[]>`
+      select memory_id, type, direction, other_id, created_at::text as created_at
+      from agent_memory.memory_links_for(${ids}::uuid[])`;
+    if (rows.length === 0) return;
+    const byMemory = new Map<string, Row[]>();
+    for (const r of rows) {
+      const list = byMemory.get(r.memory_id) ?? [];
+      list.push(r);
+      byMemory.set(r.memory_id, list);
+    }
+    for (const m of memories) {
+      const mine = byMemory.get(m.id);
+      if (!mine) continue;
+      mine.sort((a, b) =>
+        a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.other_id < b.other_id ? -1 : 1
+      );
+      m.links = mine.slice(0, LINKS_SHOWN_MAX).map((r) => ({
+        type: r.type as LinkType,
+        direction: r.direction as LinkDirection,
+        memoryId: r.other_id as string,
+      }));
+      if (mine.length > LINKS_SHOWN_MAX) m.moreLinks = mine.length - LINKS_SHOWN_MAX;
+      if (mine.some((r) => r.type === 'supersedes' && r.direction === 'in')) m.superseded = true;
     }
   }
 
@@ -374,6 +410,7 @@ export class PgMemoryStore implements MemoryStore {
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
+      await this.addLinks(tx, results.map((r) => r.memory));
       return results;
     });
   }
@@ -406,7 +443,9 @@ export class PgMemoryStore implements MemoryStore {
           and (${f.before ?? null}::timestamptz is null or created_at <= ${f.before ?? null}::timestamptz)
         order by created_at desc, id
         limit ${limit + 1} offset ${offset}`;
-      return { memories: rows.slice(0, limit).map(rowToMemory), hasMore: rows.length > limit };
+      const memories = rows.slice(0, limit).map(rowToMemory);
+      await this.addLinks(tx, memories);
+      return { memories, hasMore: rows.length > limit };
     });
   }
 
@@ -429,6 +468,7 @@ export class PgMemoryStore implements MemoryStore {
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
+      await this.addLinks(tx, results.map((r) => r.memory));
       return results;
     });
   }
@@ -492,7 +532,9 @@ export class PgMemoryStore implements MemoryStore {
       }::text)
         order by created_at desc, id
         limit ${limit}`;
-      return rows.map(rowToMemory);
+      const memories = rows.map(rowToMemory);
+      await this.addLinks(tx, memories);
+      return memories;
     });
   }
 
