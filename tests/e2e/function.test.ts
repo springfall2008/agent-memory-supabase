@@ -181,12 +181,12 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(adminTools.length, 38);
       assertEquals(adminTools.filter((n) => n.startsWith('admin_')).length, 13);
       const base = await names(rw.token);
-      assertEquals(base.length, 22);
+      assertEquals(base.length, 25);
       assert(!base.some((n) => n.startsWith('admin_')));
       assertEquals(await names(none.token), base);
       const bot = await issue(world.bw.id);
       assertEquals(await names(bot.token), base);
-      assertEquals(adminTools.slice(0, 22), base);
+      assertEquals(adminTools.slice(0, 25), base);
     });
 
     await t('two clients on one token trade a question and answer', async () => {
