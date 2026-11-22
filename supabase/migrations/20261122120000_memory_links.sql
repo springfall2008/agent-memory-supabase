@@ -132,3 +132,68 @@ revoke execute on function agent_memory.relate_memories(uuid, uuid, text) from p
 revoke execute on function agent_memory.unrelate_memories(uuid, uuid, text) from public;
 grant execute on function agent_memory.relate_memories(uuid, uuid, text) to agent_memory_member;
 grant execute on function agent_memory.unrelate_memories(uuid, uuid, text) to agent_memory_member;
+
+-- ===== 3. Read functions (security invoker: row-level security decides what is visible) =====
+
+-- Breadth-first walk from p_id over visible links. p_direction is 'out', 'in' or 'both'; relates-to has no direction
+-- and matches every filter, always reading as 'both'. p_types null means every type. The walk goes at most
+-- least(p_depth, 3) hops and only through memories in p_scope_ids (null means any); the start memory is always
+-- allowed and never returned. Each memory comes back once, at its shallowest depth, with the path of steps that reached
+-- it. Rows are ordered by depth, then the reaching link's created_at (newest first), then id, at most p_limit.
+create function agent_memory.memory_neighbours(
+  p_id uuid, p_direction text, p_types text[], p_depth int, p_scope_ids uuid[], p_limit int
+) returns table (id uuid, depth int, path jsonb)
+language sql stable security invoker
+set search_path = ''
+as $$
+  with recursive walk as (
+    select p_id as id, 0 as depth, '[]'::jsonb as path, array[p_id] as seen, null::timestamptz as via_at
+    union all
+    select e.other, w.depth + 1,
+           w.path || pg_catalog.jsonb_build_array(
+             pg_catalog.jsonb_build_object('type', e.type, 'direction', e.dir, 'memoryId', e.other)),
+           w.seen || e.other, e.created_at
+    from walk w
+    cross join lateral (
+      select l.created_at, l.type,
+             case when l.type = 'relates-to' then 'both' when l.from_id = w.id then 'out' else 'in' end as dir,
+             case when l.from_id = w.id then l.to_id else l.from_id end as other
+      from agent_memory.memory_links l
+      where (l.from_id = w.id or l.to_id = w.id)
+        and (p_types is null or l.type = any (p_types))
+        and (p_direction = 'both' or l.type = 'relates-to'
+             or (p_direction = 'out' and l.from_id = w.id) or (p_direction = 'in' and l.to_id = w.id))
+    ) e
+    join agent_memory.memories m on m.id = e.other
+    where w.depth < least(p_depth, 3)
+      and not (e.other = any (w.seen))
+      and (p_scope_ids is null or m.scope_id = any (p_scope_ids))
+  ),
+  shallowest as (
+    select distinct on (walk.id) walk.id, walk.depth, walk.path, walk.via_at
+    from walk where walk.depth > 0
+    order by walk.id, walk.depth, walk.via_at desc
+  )
+  select s.id, s.depth, s.path from shallowest s
+  order by s.depth, s.via_at desc, s.id
+  limit p_limit
+$$;
+
+-- Every visible link end for each id in p_ids, one row per end. direction is 'out' where the id is from_id, 'in' where it
+-- is to_id, and 'both' for every relates-to link.
+create function agent_memory.memory_links_for(p_ids uuid[])
+returns table (memory_id uuid, type text, direction text, other_id uuid, created_at timestamptz)
+language sql stable security invoker
+set search_path = ''
+as $$
+  select l.from_id, l.type, case when l.type = 'relates-to' then 'both' else 'out' end, l.to_id, l.created_at
+  from agent_memory.memory_links l where l.from_id = any (p_ids)
+  union all
+  select l.to_id, l.type, case when l.type = 'relates-to' then 'both' else 'in' end, l.from_id, l.created_at
+  from agent_memory.memory_links l where l.to_id = any (p_ids)
+$$;
+
+revoke execute on function agent_memory.memory_neighbours(uuid, text, text[], int, uuid[], int) from public;
+revoke execute on function agent_memory.memory_links_for(uuid[]) from public;
+grant execute on function agent_memory.memory_neighbours(uuid, text, text[], int, uuid[], int) to agent_memory_member;
+grant execute on function agent_memory.memory_links_for(uuid[]) to agent_memory_member;
