@@ -44,6 +44,8 @@ export const NEIGHBOURS_MAX_DEPTH = 3;
 export const NEIGHBOURS_DEFAULT_DEPTH = 1;
 /** `neighbours` returns at most this many memories. */
 export const NEIGHBOURS_MAX_RESULTS = 100;
+/** `neighbours` with detail 'short' returns this many characters of each memory's content. */
+export const NEIGHBOUR_SNIPPET_CHARS = 160;
 
 /** A neighbour walk goes 1..NEIGHBOURS_MAX_DEPTH hops. */
 export function checkDepth(n: number): void {

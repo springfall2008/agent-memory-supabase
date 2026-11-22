@@ -72,7 +72,8 @@ agent holding one memory can find the ones connected to it without another query
 | `relates-to` | loosely associated; it has no direction, and the pair is stored once |
 
 `relate_memories` and `unrelate_memories` create and remove links, and `neighbours` follows them (1 to 3 hops, by
-direction and type, up to 100 memories, each with the path that reached it). It does not count as an access. Search,
+direction and type, up to 100 memories, each with the path that reached it; `detail: "short"` returns a
+160-character snippet instead of each memory's full content, for wide walks). It does not count as an access. Search,
 `recall`, `find_related` and `list_recent` results show each memory's links (up to 10, plus a `moreLinks` count), and a
 memory that a newer one `supersedes` is flagged `superseded: true`; it is flagged, not ranked lower.
 

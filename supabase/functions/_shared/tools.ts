@@ -1,7 +1,7 @@
 import { z } from 'npm:zod@4.6.7';
 import type { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import type { PgThreadStore } from './thread-store.ts';
-import { checkLimit, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
+import { checkLimit, NEIGHBOUR_SNIPPET_CHARS, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
 import {
   type Embedder,
   LINK_TYPES,
@@ -257,6 +257,7 @@ export function handleNeighbours(store: MemoryStore) {
     types?: LinkType[];
     depth?: number;
     scopes?: string[];
+    detail?: 'short' | 'full';
   }) => {
     try {
       const r = await store.neighbours(args.memory_id, {
@@ -265,7 +266,17 @@ export function handleNeighbours(store: MemoryStore) {
         depth: args.depth,
         scopes: scopesOrUndefined(args.scopes),
       });
-      return success({ count: r.neighbours.length, truncated: r.truncated, results: r.neighbours });
+      // 'short' swaps each memory's content for a snippet, so a wide walk costs little context.
+      const results = args.detail === 'short'
+        ? r.neighbours.map(({ memory, path }) => {
+          const { content, ...rest } = memory;
+          const snippet = content.length > NEIGHBOUR_SNIPPET_CHARS
+            ? content.slice(0, NEIGHBOUR_SNIPPET_CHARS) + '…'
+            : content;
+          return { memory: { ...rest, snippet }, path };
+        })
+        : r.neighbours;
+      return success({ count: r.neighbours.length, truncated: r.truncated, results });
     } catch (err) {
       return error('Neighbours failed', err);
     }
@@ -464,6 +475,9 @@ export function registerTools(
       ),
       types: z.array(z.enum(LINK_TYPES)).optional().describe('Only follow these link types (default all)'),
       depth: z.number().optional().describe('How many links to follow, 1 to 3 (default 1)'),
+      detail: z.enum(['short', 'full']).optional().describe(
+        `full (default): each memory's whole content. short: id, scope, category, tags, links and a ${NEIGHBOUR_SNIPPET_CHARS}-character snippet instead of the content, for wide walks`,
+      ),
       scopes: scopesSchema,
     }),
   }, handleNeighbours(store));
