@@ -86,7 +86,9 @@ Before starting work that another agent could also pick up, claim its status mem
 reason, pass your session label, and either `minutes` for how long you expect to need or `indefinite: true` for work
 that may pause for days. If the memory is already claimed, someone else is on it: pick something else, or ask before
 using `force`. Release the claim with `release_claim` when the work is done or parked. A memory in search results with a
-`claim` is taken; one with `claim.mine` is yours.
+`claim` is taken. `claim.mine` means your member holds it, which includes other agents sharing your token: check that
+`claim.session` is your own session before treating it as yours, and if `claim_memory` returns `previousSession`,
+another session of your member was working on it.
 
 ### Threads
 

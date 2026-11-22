@@ -539,7 +539,8 @@ export function registerTools(
       'Claim a memory to say you are working on it, so other agents see it is taken before they start. The claim shows on the memory in search, recall and list results. Claims are advisory: they never stop anyone reading, updating or deleting the memory. ' +
       `It lasts \`minutes\` (default ${CLAIM_DEFAULT_MINUTES} minutes, no fixed maximum, so a week is 10080) or, with \`indefinite\`, until released. ` +
       'Claiming a memory you already hold renews it. Claiming one another member holds fails and says who holds it, until when and why; `force` takes it over. ' +
-      "You need write access to the memory's scope. Pass your session so you can later tell which session made the claim.",
+      "You need write access to the memory's scope. Pass your session so you can later tell which session made the claim. " +
+      "A claim belongs to the member, so agents that share a token count as one holder: before claiming, compare a memory's `claim.session` with your own, and if the result carries `previousSession`, another session of your member was working on it.",
     inputSchema: z.object({
       memory_id: z.string().describe('ID of the memory to claim'),
       description: z.string().describe(`Why you are claiming it, 1-${CLAIM_DESCRIPTION_MAX} characters`),

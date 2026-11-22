@@ -97,6 +97,10 @@ spot claims left by stale sessions (a renewal from a different session reports `
 another member holds fails and says who holds it; `force: true` takes it over. `release_claim` removes your claim, or
 someone else's with `force`. `my_claims` lists your active claims, soonest end first.
 
+Because a claim belongs to the member, agents that share one token count as one holder: the second agent's claim succeeds
+as a renewal. Give each agent its own session label, compare `claim.session` with your own before claiming, and treat
+a returned `previousSession` as "another session of this member was on it".
+
 Claiming and releasing need write access to the memory's scope. Claims are advisory: they never stop anyone reading,
 updating or deleting the memory. An expired claim, or one whose holder has been deactivated, counts as no claim.
 

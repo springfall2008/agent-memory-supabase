@@ -59,8 +59,8 @@ the holder's name, the end time and the description, never a session. (Claude's 
 ## 4. The tools
 
 Every member gets three more tools: memory tools go from 14 to 17, member tools from 25 to 28, admin tools from 38 to 41.
-The two write tools take the same optional `session` / `session_label` arguments the thread tools take, and create the
-session if the label is new.
+`claim_memory` takes the same optional `session` / `session_label` arguments the thread tools take, and creates the
+session if the label is new. `release_claim` takes none: a release deletes the claim, so there is no session to record.
 
 - **`claim_memory(memory_id, description, minutes?, force?)`** needs read and write access to the memory's scope. An id
   that is absent and one the caller cannot read give the same "Memory not found" error.

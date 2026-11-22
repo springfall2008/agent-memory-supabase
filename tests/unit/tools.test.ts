@@ -588,6 +588,8 @@ Deno.test('the claim tools validate their arguments and describe the rules', () 
   registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true });
   registered.my_claims.inputSchema.parse({ scopes: ['s'] });
   const d = registered.claim_memory.description ?? '';
-  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force']) assertStringIncludes(d, phrase);
+  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force', 'share a token', 'previousSession']) {
+    assertStringIncludes(d, phrase);
+  }
   for (const tool of ['search', 'recall']) assertStringIncludes(registered[tool].description ?? '', 'claim');
 });
