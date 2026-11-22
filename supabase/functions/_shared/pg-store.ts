@@ -35,6 +35,7 @@ import type {
   LinkType,
   Memory,
   MemoryCategory,
+  MemoryClaim,
   MemoryStats,
   MemoryStore,
   MyClaim,
@@ -180,6 +181,32 @@ export class PgMemoryStore implements MemoryStore {
       const total = Number(mine[0].total);
       if (total > mine.length) m.moreLinks = total - mine.length;
       if (mine[0].superseded === true) m.superseded = true;
+    }
+  }
+
+  /**
+   * Adds the active claim, if any, to each memory: holder, end and description, plus `mine` and the session only when
+   * the caller holds it. One query for the whole set, never one per memory. Memories with no active claim gain no key.
+   */
+  private async addClaims(tx: Tx, memories: Memory[]): Promise<void> {
+    if (memories.length === 0) return;
+    const ids = [...new Set(memories.map((m) => m.id))];
+    const rows = await tx<Row[]>`select * from agent_memory.memory_claims_for(${ids}::uuid[])`;
+    if (rows.length === 0) return;
+    const byMemory = new Map(rows.map((r) => [r.memory_id as string, r]));
+    for (const m of memories) {
+      const r = byMemory.get(m.id);
+      if (!r) continue;
+      const claim: MemoryClaim = {
+        by: r.holder,
+        until: r.expires_at ? iso(r.expires_at) : null,
+        description: r.description,
+      };
+      if (r.mine === true) {
+        claim.mine = true;
+        if (r.session_id != null) claim.session = { id: r.session_id, label: r.session_label ?? null };
+      }
+      m.claim = claim;
     }
   }
 
@@ -421,6 +448,7 @@ export class PgMemoryStore implements MemoryStore {
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
       await this.addLinks(tx, results.map((r) => r.memory));
+      await this.addClaims(tx, results.map((r) => r.memory));
       return results;
     });
   }
@@ -455,6 +483,7 @@ export class PgMemoryStore implements MemoryStore {
         limit ${limit + 1} offset ${offset}`;
       const memories = rows.slice(0, limit).map(rowToMemory);
       await this.addLinks(tx, memories);
+      await this.addClaims(tx, memories);
       return { memories, hasMore: rows.length > limit };
     });
   }
@@ -479,6 +508,7 @@ export class PgMemoryStore implements MemoryStore {
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
       await this.addLinks(tx, results.map((r) => r.memory));
+      await this.addClaims(tx, results.map((r) => r.memory));
       return results;
     });
   }
@@ -527,6 +557,7 @@ export class PgMemoryStore implements MemoryStore {
       const page = rows.slice(0, NEIGHBOURS_MAX_RESULTS);
       const found = page.map((r) => ({ memory: rowToMemory(r), path: r.walk_path as Neighbour['path'] }));
       await this.addLinks(tx, found.map((n) => n.memory));
+      await this.addClaims(tx, found.map((n) => n.memory));
       return { neighbours: found, truncated: rows.length > NEIGHBOURS_MAX_RESULTS };
     });
   }
@@ -607,6 +638,7 @@ export class PgMemoryStore implements MemoryStore {
         limit ${limit}`;
       const memories = rows.map(rowToMemory);
       await this.addLinks(tx, memories);
+      await this.addClaims(tx, memories);
       return memories;
     });
   }

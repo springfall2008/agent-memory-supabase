@@ -162,3 +162,61 @@ Deno.test('two concurrent claims on one memory: exactly one wins', () =>
       await other.end();
     }
   }));
+
+const pick = <T extends { id: string }>(list: T[], id: string): T => {
+  const found = list.find((m) => m.id === id);
+  if (!found) throw new Error(`memory ${id} missing from results`);
+  return found;
+};
+
+Deno.test('search, browse, findRelated, listRecent and neighbours carry the claim', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const a = await rw.store(w.alpha.name, req('quokka field notes claimed'));
+    const b = await rw.store(w.alpha.name, req('quokka field notes free'));
+    await rw.claim(a.id, 'working on it', {});
+    await rw.relate(b.id, a.id, 'relates-to');
+    const lists = {
+      search: (await rw.search('quokka', 'keyword', {})).map((r) => r.memory),
+      browse: (await rw.browse({})).memories,
+      findRelated: (await rw.findRelated(b.id, 5)).map((r) => r.memory),
+      listRecent: await rw.listRecent(10),
+      neighbours: (await rw.neighbours(b.id, {})).neighbours.map((n) => n.memory),
+    };
+    for (const [name, list] of Object.entries(lists)) {
+      const claimed = pick(list, a.id);
+      assertEquals(claimed.claim?.by, w.rw.name, `${name}: holder`);
+      assertEquals(claimed.claim?.description, 'working on it', `${name}: description`);
+      assertEquals(Math.round((Date.parse(claimed.claim!.until!) - Date.now()) / 60_000), 60, `${name}: until`);
+      if (name !== 'findRelated' && name !== 'neighbours') {
+        assertEquals('claim' in pick(list, b.id), false, `${name}: an unclaimed memory has no claim key`);
+      }
+    }
+  }));
+
+Deno.test('the holder sees mine and the session; another member sees neither', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const [ro] = mk(w.ro.id);
+    const a = await rw.store(w.alpha.name, req('a claimed note'));
+    await rw.claim(a.id, 'mine', { indefinite: true }, { sessionLabel: 's-a' });
+    const own = pick(await rw.listRecent(10), a.id).claim!;
+    assertEquals(own.mine, true);
+    assertEquals(own.session?.label, 's-a');
+    assertEquals(own.until, null);
+    const seen = pick(await ro.listRecent(10), a.id).claim!;
+    assertEquals(seen.by, w.rw.name);
+    assertEquals('mine' in seen, false);
+    assertEquals('session' in seen, false);
+  }));
+
+Deno.test('an expired claim is not shown', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const a = await rw.store(w.alpha.name, req('an old claim'));
+    await rw.claim(a.id, 'stale', {});
+    await admin`update agent_memory.memory_claims
+      set claimed_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' where memory_id = ${a.id}`;
+    assertEquals('claim' in pick(await rw.listRecent(10), a.id), false);
+    assertEquals(await rw.myClaims(), []);
+  }));
