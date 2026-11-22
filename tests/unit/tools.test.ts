@@ -449,3 +449,18 @@ Deno.test('the registered link tools reject an unknown link type', () => {
     registered[tool].inputSchema.parse({ from_id: 'a', to_id: 'b', type: 'supersedes' });
   }
 });
+
+Deno.test('search and recall descriptions say that results carry links and a superseded flag', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as { _registeredTools: Record<string, { description?: string }> })
+    ._registeredTools;
+  for (const tool of ['search', 'recall']) {
+    const d = registered[tool].description ?? '';
+    assertStringIncludes(d, 'links', `${tool} mentions links`);
+    assertStringIncludes(d, 'superseded', `${tool} mentions superseded`);
+    assertStringIncludes(d, 'neighbours', `${tool} points at neighbours`);
+  }
+});

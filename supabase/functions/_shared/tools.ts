@@ -387,6 +387,7 @@ export function registerTools(
   server.registerTool('search', {
     description:
       'Search memories by meaning and/or keywords. Default mode is hybrid (BM25 + vector). Returns ranked results with relevance scores. ' +
+      'Each memory shows its `links` to other memories and `superseded: true` when a newer memory replaces it; call `neighbours` to follow links. ' +
       'Omit the query to browse instead: every memory matching the filters, newest first, with no ranking, paged by limit and offset ' +
       '(has_more says whether another page follows). Browsing does not count as access, so use it to sweep for cleanup. ' +
       'Offsets shift if you delete or add memories while paging; after deleting, re-fetch from the same offset or page from the end.',
@@ -405,7 +406,7 @@ export function registerTools(
 
   server.registerTool('recall', {
     description:
-      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently.',
+      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently. Returned memories show their `links` to other memories and `superseded: true` when a newer memory replaces them; call `neighbours` to follow links.',
     inputSchema: z.object({
       topics: z.array(z.string()).describe('List of topics to search for'),
       include_recent: z.number().optional().describe('Number of recent memories to include (default 5)'),

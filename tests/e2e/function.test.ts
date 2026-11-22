@@ -122,6 +122,55 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(gone.isError, true);
     });
 
+    await t('link two memories, follow the link, see it in search, remove it', async () => {
+      const c = await open(rw.token);
+      const store = async (content: string) =>
+        parse(
+          await c.callTool({
+            name: 'store',
+            arguments: { scope: world.alpha.name, content, category: 'learning', tags: ['e2e-links'] },
+          }),
+        );
+      const older = await store('okapi migration plan, first draft');
+      const newer = await store('okapi migration plan, revised after review');
+
+      const related = parse(
+        await c.callTool({
+          name: 'relate_memories',
+          arguments: { from_id: newer.id, to_id: older.id, type: 'supersedes' },
+        }),
+      );
+      assertEquals(related, { related: true });
+
+      const walked = parse(await c.callTool({ name: 'neighbours', arguments: { memory_id: newer.id } }));
+      assertEquals(walked.count, 1);
+      assertEquals(walked.truncated, false);
+      assertEquals(walked.results[0].memory.id, older.id);
+      assertEquals(walked.results[0].memory.superseded, true);
+      assertEquals(walked.results[0].path, [{ type: 'supersedes', direction: 'out', memoryId: older.id }]);
+
+      const found = parse(await c.callTool({ name: 'search', arguments: { query: 'okapi migration plan' } }));
+      const hit = found.results.find((r: { memory: { id: string } }) => r.memory.id === older.id);
+      assertEquals(hit.memory.superseded, true);
+      assertEquals(hit.memory.links, [{ type: 'supersedes', direction: 'in', memoryId: newer.id }]);
+
+      const removed = parse(
+        await c.callTool({
+          name: 'unrelate_memories',
+          arguments: { from_id: newer.id, to_id: older.id, type: 'supersedes' },
+        }),
+      );
+      assertEquals(removed, { unrelated: true });
+      const after = parse(await c.callTool({ name: 'neighbours', arguments: { memory_id: newer.id } }));
+      assertEquals(after.count, 0);
+
+      const denied = await c.callTool({
+        name: 'relate_memories',
+        arguments: { from_id: newer.id, to_id: older.id, type: 'nope' },
+      });
+      assertEquals(denied.isError, true);
+    });
+
     await t('spoofing a member id changes nothing', async () => {
       const c = await open(rw.token, { 'X-Member-Id': world.ro.id });
       const m = parse(

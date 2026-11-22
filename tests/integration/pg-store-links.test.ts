@@ -306,3 +306,34 @@ Deno.test('neighbours results carry links and the superseded flag', () =>
     assertEquals(reached.superseded, true);
     assertEquals(reached.links?.length, 2);
   }));
+
+Deno.test('neighbours follows several hops and filters by type and direction', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const [ma, mb, mc, md] = [
+      await s.store(w.alpha.name, req('chain a')),
+      await s.store(w.alpha.name, req('chain b')),
+      await s.store(w.alpha.name, req('chain c')),
+      await s.store(w.alpha.name, req('chain d')),
+    ];
+    await s.relate(ma.id, mb.id, 'depends-on');
+    await s.relate(mb.id, mc.id, 'supersedes');
+    await s.relate(mc.id, md.id, 'depends-on');
+
+    const two = await s.neighbours(ma.id, { direction: 'out', depth: 2 });
+    assertEquals(ids(two), [mb.id, mc.id]);
+    assertEquals(two.neighbours[1].path.map((p) => [p.type, p.memoryId]), [
+      ['depends-on', mb.id],
+      ['supersedes', mc.id],
+    ]);
+    assertEquals(ids(await s.neighbours(ma.id, { direction: 'out', depth: 3 })), [mb.id, mc.id, md.id]);
+    // the supersedes link in the middle blocks a depends-on-only walk
+    assertEquals(ids(await s.neighbours(ma.id, { direction: 'out', depth: 3, types: ['depends-on'] })), [mb.id]);
+    assertEquals(
+      ids(await s.neighbours(ma.id, { direction: 'out', depth: 3, types: ['depends-on', 'supersedes'] })),
+      [mb.id, mc.id, md.id],
+    );
+    // walking backwards from the end reaches the same chain, nearest first
+    assertEquals(ids(await s.neighbours(md.id, { direction: 'in', depth: 2 })), [mc.id, mb.id]);
+    assertEquals(ids(await s.neighbours(md.id, { direction: 'out', depth: 3 })), []);
+  }));

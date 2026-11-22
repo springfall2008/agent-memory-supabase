@@ -83,7 +83,8 @@ const TS = (col: string) => `to_char(${col} at time zone 'utc', 'YYYY-MM-DD"T"HH
 
 /**
  * Read everything except token hashes. With `scope`, only that scope's memories, grants and threads (with their posts,
- * the links to memories in the backup, and subscriptions), the sessions those reference, and the members behind it all.
+ * the thread links to memories in the backup, and subscriptions), the memory-to-memory links whose two ends are both in
+ * the backup, the sessions those reference, and the members behind it all.
  */
 export function exportBackup(sql: Sql, scope?: string): Promise<Backup> {
   // One repeatable-read snapshot, so a backup taken while writers are active is point-in-time consistent.
@@ -346,14 +347,18 @@ async function main(): Promise<void> {
       }
       console.log(
         `Wrote ${out}: ${data.scopes.length} scopes, ${data.members.length} members, ` +
-          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads`,
+          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
+            data.memoryLinks?.length ?? 0
+          } memory links`,
       );
     } else {
       const data = JSON.parse(await Deno.readTextFile(p[0])) as Backup;
       await restoreBackup(sql, data);
       console.log(
         `Restored ${data.scopes.length} scopes, ${data.members.length} members, ` +
-          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads`,
+          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
+            data.memoryLinks?.length ?? 0
+          } memory links`,
       );
     }
   } finally {

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(41);
+select plan(45);
 
 -- Fixtures (as postgres). Members: w writes s1+s2; a writes s1, reads s2; b reads s1, writes s2; r reads s1; o has no grants.
 -- Memories: m1, m2, m6 and 100 extras ('bbbbbbbb-...') in s1; m3 in s2. m6 already has 100 outgoing links.
@@ -215,6 +215,25 @@ delete from agent_memory.memories where id = 'aaaaaaaa-0000-0000-0000-0000000000
 select is((select count(*) from agent_memory.memory_links
   where from_id = 'aaaaaaaa-0000-0000-0000-000000000003' or to_id = 'aaaaaaaa-0000-0000-0000-000000000003'),
   0::bigint, 'purging a memory deletes its links');
+
+-- Erase and tombstone purge remove a memory's links too (as postgres, like the erase tests)
+insert into agent_memory.memories (id, scope_id, content, category, created_by, updated_by, embedding)
+select v.id::uuid, 'a1000000-0000-0000-0000-0000000000a1', v.content, 'other',
+  '11111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111',
+  array_fill(0.1::real, array[384])::extensions.vector
+from (values ('aaaaaaaa-0000-0000-0000-000000000008', 'm8'), ('aaaaaaaa-0000-0000-0000-000000000009', 'm9')) as v(id, content);
+insert into agent_memory.memory_links (from_id, to_id, type, created_by) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000008', 'depends-on', '11111111-1111-1111-1111-111111111111'),
+  ('aaaaaaaa-0000-0000-0000-000000000009', 'aaaaaaaa-0000-0000-0000-000000000001', 'supersedes', '11111111-1111-1111-1111-111111111111');
+select is(agent_memory.erase('aaaaaaaa-0000-0000-0000-000000000008'), true, 'erase of a linked memory returns true');
+select is((select count(*) from agent_memory.memory_links
+  where from_id = 'aaaaaaaa-0000-0000-0000-000000000008' or to_id = 'aaaaaaaa-0000-0000-0000-000000000008'),
+  0::bigint, 'erase leaves no links behind');
+update agent_memory.memories set deleted_at = now() - interval '31 days' where id = 'aaaaaaaa-0000-0000-0000-000000000009';
+select is(agent_memory.purge_tombstones(), 1, 'the tombstone purge removes the expired memory');
+select is((select count(*) from agent_memory.memory_links
+  where from_id = 'aaaaaaaa-0000-0000-0000-000000000009' or to_id = 'aaaaaaaa-0000-0000-0000-000000000009'),
+  0::bigint, 'the tombstone purge leaves no links behind');
 
 select * from finish();
 rollback;

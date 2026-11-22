@@ -338,6 +338,7 @@ Deno.test('backup round-trips memory links', () =>
     const file = `${dir}/links.json`;
     const r1 = await cli('backup', '--out', file);
     assertEquals(r1.code, 0, r1.err);
+    assertStringIncludes(r1.out, '4 memory links');
     const data = JSON.parse(await Deno.readTextFile(file));
     assertEquals(data.memoryLinks.length, 4);
     assertEquals(data.memoryLinks.map((l: { type: string }) => l.type).sort(), [
@@ -351,6 +352,7 @@ Deno.test('backup round-trips memory links', () =>
       agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
     const r2 = await cli('restore-backup', file);
     assertEquals(r2.code, 0, r2.err);
+    assertStringIncludes(r2.out, '4 memory links');
     assertEquals(await linkRows(db), before);
 
     // a file written before links existed still restores
