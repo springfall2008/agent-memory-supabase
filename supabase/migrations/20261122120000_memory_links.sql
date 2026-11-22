@@ -216,21 +216,38 @@ begin
 end
 $$;
 
--- Every visible link end for each id in p_ids, one row per end. direction is 'out' where the id is from_id, 'in' where it
--- is to_id, and 'both' for every relates-to link.
-create function agent_memory.memory_links_for(p_ids uuid[])
-returns table (memory_id uuid, type text, direction text, other_id uuid, created_at timestamptz)
+-- The visible link ends for each id in p_ids, newest first, at most p_limit rows per memory. `total` is the memory's full
+-- count of visible link ends and `superseded` is true when any visible incoming `supersedes` link exists, both
+-- counted over ALL its links and not only the rows returned, so a hub memory costs the caller p_limit rows however many
+-- links it has. direction is 'out' where the id is from_id, 'in' where it is to_id, and 'both' for every relates-to.
+create function agent_memory.memory_links_for(p_ids uuid[], p_limit int)
+returns table (
+  memory_id uuid, type text, direction text, other_id uuid, created_at timestamptz, total int, superseded boolean
+)
 language sql stable security invoker
 set search_path = ''
 as $$
-  select l.from_id, l.type, case when l.type = 'relates-to' then 'both' else 'out' end, l.to_id, l.created_at
-  from agent_memory.memory_links l where l.from_id = any (p_ids)
-  union all
-  select l.to_id, l.type, case when l.type = 'relates-to' then 'both' else 'in' end, l.from_id, l.created_at
-  from agent_memory.memory_links l where l.to_id = any (p_ids)
+  with ends as (
+    select l.from_id as memory_id, l.type, case when l.type = 'relates-to' then 'both' else 'out' end as direction,
+           l.to_id as other_id, l.created_at
+    from agent_memory.memory_links l where l.from_id = any (p_ids)
+    union all
+    select l.to_id, l.type, case when l.type = 'relates-to' then 'both' else 'in' end, l.from_id, l.created_at
+    from agent_memory.memory_links l where l.to_id = any (p_ids)
+  ),
+  ranked as (
+    select e.memory_id, e.type, e.direction, e.other_id, e.created_at,
+           pg_catalog.row_number() over (partition by e.memory_id order by e.created_at desc, e.other_id, e.type) as rn,
+           pg_catalog.count(*) over (partition by e.memory_id) as total,
+           pg_catalog.bool_or(e.type = 'supersedes' and e.direction = 'in') over (partition by e.memory_id) as superseded
+    from ends e
+  )
+  select r.memory_id, r.type, r.direction, r.other_id, r.created_at, r.total::int, r.superseded
+  from ranked r where r.rn <= p_limit
+  order by r.memory_id, r.rn
 $$;
 
 revoke execute on function agent_memory.memory_neighbours(uuid, text, text[], int, uuid[], int) from public;
-revoke execute on function agent_memory.memory_links_for(uuid[]) from public;
+revoke execute on function agent_memory.memory_links_for(uuid[], int) from public;
 grant execute on function agent_memory.memory_neighbours(uuid, text, text[], int, uuid[], int) to agent_memory_member;
-grant execute on function agent_memory.memory_links_for(uuid[]) to agent_memory_member;
+grant execute on function agent_memory.memory_links_for(uuid[], int) to agent_memory_member;

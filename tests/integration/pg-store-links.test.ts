@@ -267,3 +267,28 @@ Deno.test('neighbours stays fast on a densely linked graph', () =>
     assertEquals(r.truncated, false);
     assert(ms < 1500, `neighbours took ${Math.round(ms)} ms`);
   }));
+
+Deno.test('a hub keeps its superseded flag and true count when the supersedes link is beyond the first 10', () =>
+  withWorld(async (w, admin, mk) => {
+    const [s] = mk(w.rw.id);
+    const [{ id: hub }] = await admin`insert into agent_memory.memories
+      (scope_id, content, category, created_by, updated_by, embedding)
+      values (${w.alpha.id}, 'zebracorn hub memory', 'other', ${w.rw.id}, ${w.rw.id},
+              array_fill(0.1::real, array[384])::extensions.vector) returning id`;
+    await admin`insert into agent_memory.memories (scope_id, content, category, created_by, updated_by, embedding)
+      select ${w.alpha.id}, 'filler ' || i, 'other', ${w.rw.id}, ${w.rw.id},
+             array_fill(0.1::real, array[384])::extensions.vector from generate_series(1, 150) i`;
+    const fillers = await admin`select id, content from agent_memory.memories
+      where scope_id = ${w.alpha.id} and content like 'filler %'`;
+    for (const [i, f] of fillers.entries()) {
+      // the oldest link (largest i) is the only supersedes link
+      await admin`insert into agent_memory.memory_links (from_id, to_id, type, created_by, created_at)
+        values (${f.id}, ${hub}, ${i === fillers.length - 1 ? 'supersedes' : 'depends-on'}, ${w.rw.id},
+                now() - (${i} || ' minutes')::interval)`;
+    }
+    const found = (await s.search('zebracorn', 'keyword', {})).map((r) => r.memory);
+    const h = pick(found, hub);
+    assertEquals(h.links?.length, 10);
+    assertEquals(h.moreLinks, 140);
+    assertEquals(h.superseded, true);
+  }));

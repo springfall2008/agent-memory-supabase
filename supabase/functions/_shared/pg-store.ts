@@ -140,16 +140,17 @@ export class PgMemoryStore implements MemoryStore {
   }
 
   /**
-   * Adds each memory's visible links (at most LINKS_SHOWN_MAX, newest first), a count of the rest, and `superseded`
-   * when a visible `supersedes` link points at it. One query for the whole set, never one per memory. Memories with no
-   * visible links gain no key. created_at is read as text so links made in the same millisecond still order correctly.
+   * Adds each memory's visible links (at most LINKS_SHOWN_MAX, newest first), the count of the rest, and `superseded`
+   * when a visible `supersedes` link points at it. One query for the whole set, never one per memory; the database
+   * ranks, caps and counts, so a hub memory costs LINKS_SHOWN_MAX rows however many links it has. Memories with no
+   * visible links gain no key.
    */
   private async addLinks(tx: Tx, memories: Memory[]): Promise<void> {
     if (memories.length === 0) return;
     const ids = [...new Set(memories.map((m) => m.id))];
     const rows = await tx<Row[]>`
-      select memory_id, type, direction, other_id, created_at::text as created_at
-      from agent_memory.memory_links_for(${ids}::uuid[])`;
+      select memory_id, type, direction, other_id, total, superseded
+      from agent_memory.memory_links_for(${ids}::uuid[], ${LINKS_SHOWN_MAX}::int)`;
     if (rows.length === 0) return;
     const byMemory = new Map<string, Row[]>();
     for (const r of rows) {
@@ -160,16 +161,14 @@ export class PgMemoryStore implements MemoryStore {
     for (const m of memories) {
       const mine = byMemory.get(m.id);
       if (!mine) continue;
-      mine.sort((a, b) =>
-        a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.other_id < b.other_id ? -1 : 1
-      );
-      m.links = mine.slice(0, LINKS_SHOWN_MAX).map((r) => ({
+      m.links = mine.map((r) => ({
         type: r.type as LinkType,
         direction: r.direction as LinkDirection,
         memoryId: r.other_id as string,
       }));
-      if (mine.length > LINKS_SHOWN_MAX) m.moreLinks = mine.length - LINKS_SHOWN_MAX;
-      if (mine.some((r) => r.type === 'supersedes' && r.direction === 'in')) m.superseded = true;
+      const total = Number(mine[0].total);
+      if (total > mine.length) m.moreLinks = total - mine.length;
+      if (mine[0].superseded === true) m.superseded = true;
     }
   }
 

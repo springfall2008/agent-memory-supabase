@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(21);
+select plan(25);
 
 -- Fixtures (as postgres). w writes s1+s2; r reads s1 only. m1, m2, m4 are in s1; m3, m5 are in s2.
 -- Links: m1->m2 depends-on, m2->m3 depends-on, m3->m1 derived-from (a cycle), m3-m4 relates-to, m5->m1 depends-on.
@@ -21,9 +21,22 @@ insert into agent_memory.memory_links (from_id, to_id, type, created_by) values
   ('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000004', 'relates-to', '11111111-1111-1111-1111-111111111111'),
   ('aaaaaaaa-0000-0000-0000-000000000005', 'aaaaaaaa-0000-0000-0000-000000000001', 'depends-on', '11111111-1111-1111-1111-111111111111');
 
+-- A hub: m7 has 12 incoming links; the oldest, from e12, is the only supersedes link.
+insert into agent_memory.memories (id, scope_id, content, category, created_by, updated_by, embedding)
+select ('cccccccc-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid, 'a1000000-0000-0000-0000-0000000000a1',
+       'e' || i, 'other', '11111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', array_fill(0.1::real, array[384])::extensions.vector
+from generate_series(1, 12) i;
+insert into agent_memory.memories (id, scope_id, content, category, created_by, updated_by, embedding) values
+  ('aaaaaaaa-0000-0000-0000-000000000007', 'a1000000-0000-0000-0000-0000000000a1', 'm7', 'other', '11111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111',
+   array_fill(0.1::real, array[384])::extensions.vector);
+insert into agent_memory.memory_links (from_id, to_id, type, created_by, created_at)
+select ('cccccccc-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid, 'aaaaaaaa-0000-0000-0000-000000000007',
+       case when i = 12 then 'supersedes' else 'depends-on' end, '11111111-1111-1111-1111-111111111111', now() - (i || ' hours')::interval
+from generate_series(1, 12) i;
+
 select ok(not has_function_privilege('anon', 'agent_memory.memory_neighbours(uuid, text, text[], int, uuid[], int)', 'execute'),
   'anon cannot execute memory_neighbours');
-select ok(not has_function_privilege('anon', 'agent_memory.memory_links_for(uuid[])', 'execute'),
+select ok(not has_function_privilege('anon', 'agent_memory.memory_links_for(uuid[], int)', 'execute'),
   'anon cannot execute memory_links_for');
 
 -- As w
@@ -53,19 +66,19 @@ reset role;
 -- links_for as w
 select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
 set local role agent_memory_member;
-select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[]) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
+select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[], 10) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
   array['aaaaaaaa-0000-0000-0000-000000000002 out', 'aaaaaaaa-0000-0000-0000-000000000003 in', 'aaaaaaaa-0000-0000-0000-000000000005 in'], 'links for m1');
-select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[]) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000003'),
+select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[], 10) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000003'),
   array['aaaaaaaa-0000-0000-0000-000000000001 out', 'aaaaaaaa-0000-0000-0000-000000000002 in', 'aaaaaaaa-0000-0000-0000-000000000004 both'], 'links for m3, relates-to reads as both');
-select is((select count(*) from agent_memory.memory_links_for('{}'::uuid[])), 0::bigint, 'no ids, no rows');
+select is((select count(*) from agent_memory.memory_links_for('{}'::uuid[], 10)), 0::bigint, 'no ids, no rows');
 reset role;
 
 -- links_for as r
 select set_config('agent_memory.member_id', '22222222-2222-2222-2222-222222222222', true);
 set local role agent_memory_member;
-select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[]) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
+select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[], 10) where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
   array['aaaaaaaa-0000-0000-0000-000000000002 out'], 'r sees only the link whose both ends it can read');
-select is((select count(*) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[]) where memory_id in ('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000005') or other_id in ('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000005')),
+select is((select count(*) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000003']::uuid[], 10) where memory_id in ('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000005') or other_id in ('aaaaaaaa-0000-0000-0000-000000000003', 'aaaaaaaa-0000-0000-0000-000000000005')),
   0::bigint, 'nothing mentions the unreadable memories');
 reset role;
 
@@ -74,8 +87,21 @@ update agent_memory.memories set deleted_at = now() where id = 'aaaaaaaa-0000-00
 select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
 set local role agent_memory_member;
 select is((select count(*) from agent_memory.memory_neighbours('aaaaaaaa-0000-0000-0000-000000000001', 'out', array['depends-on'], 3, array['a1000000-0000-0000-0000-0000000000a1','a2000000-0000-0000-0000-0000000000a2']::uuid[], 100)), 0::bigint, 'a soft-deleted memory ends the walk');
-select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001']::uuid[])),
+select is((select array_agg(other_id::text || ' ' || direction order by other_id) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000001']::uuid[], 10)),
   array['aaaaaaaa-0000-0000-0000-000000000003 in', 'aaaaaaaa-0000-0000-0000-000000000005 in'], 'a soft-deleted end drops out of links_for');
+reset role;
+
+-- links_for caps each memory's rows but still reports the true total and the superseded flag
+select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
+set local role agent_memory_member;
+select is((select count(*) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000007']::uuid[], 10)),
+  10::bigint, 'a hub returns at most p_limit rows');
+select is((select max(total) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000007']::uuid[], 10)),
+  12, 'but reports all 12 links as the total');
+select is((select bool_or(superseded) from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000007']::uuid[], 10)),
+  true, 'superseded is true although the supersedes link is not among the rows returned');
+select is((select other_id from agent_memory.memory_links_for(array['aaaaaaaa-0000-0000-0000-000000000007']::uuid[], 10) limit 1),
+  'cccccccc-0000-0000-0000-000000000001'::uuid, 'rows come newest first');
 reset role;
 
 select * from finish();
