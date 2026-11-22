@@ -35,9 +35,10 @@ A new table, added by a new migration (never by editing an old one):
 - `memory_id` is the primary key and references `memories` with `on delete cascade`, so a memory has at most one claim
   row, and a permanent purge or erase removes it.
 - `member_id` references `members`. `session_id` references `agent_sessions` with `on delete set null` and may be null.
-- `description` is the reason: 1 to 200 characters after trimming. `expires_at > claimed_at` is a check.
-- A claim is **active** while `expires_at` is after the database clock (`now()`), its memory is not soft-deleted and its
-  holder is not a deactivated member (so a deactivated bot cannot block everyone until its claim runs out). An
+- `description` is the reason: 1 to 200 characters after trimming. `expires_at` is null for an **indefinite** claim;
+  otherwise `expires_at > claimed_at` is a check.
+- A claim is **active** while `expires_at` is null or after the database clock (`now()`), its memory is not soft-deleted
+  and its holder is not a deactivated member (so a deactivated bot cannot block everyone until its claim runs out). An
   inactive row counts as no claim: it is ignored by every read and replaced by the next claim. There is no background
   job. (Claude's call)
 - **Rights changes.** A claim is not tied to the holder's access. If the holder later loses write access to the scope,
@@ -71,13 +72,17 @@ session if the label is new.
   - An active claim by someone else: it fails with a plain message naming the holder, the time it ends and the
     description, for example `Memory <id> is claimed by <name> until <time>: <description>`. With `force: true` the
     caller takes it over, and the result says who held it before (name, until, description).
-  - `minutes` is a whole number from 1 to 1440 and defaults to 60. (Claude's call)
-  - The result is `{ claimed: true, until, overridden? }`.
+  - `minutes` is a whole number of at least 1 with **no upper limit** short of a sanity bound of 10 years (5,256,000), so
+    "a week" is `10080`. It defaults to 60 when omitted. (The default is Claude's call.)
+  - `indefinite: true` makes a claim with no end, for work that may pause for an unknown time. It cannot be combined
+    with `minutes`. An indefinite claim stays until it is released, forced, or its holder is deactivated.
+  - The result is `{ claimed: true, until, overridden?, previousSession? }`, where `until` is null for an indefinite
+    claim.
 - **`release_claim(memory_id, force?)`** needs the same access. The holder releases their own claim. Releasing another
   holder's active claim fails unless `force: true`. Releasing a memory with no active claim is not an error. The result
   is `{ released: boolean }`.
 - **`my_claims(scopes?)`** lists the active claims held by the calling **member**, across every readable scope (or the
-  named ones), soonest expiry first, at most 100. Each entry has the memory in short form (id, scope, category, tags and
+  named ones), soonest expiry first with indefinite claims last, at most 100. Each entry has the memory in short form (id, scope, category, tags and
   a 160-character snippet), the description, `claimedAt`, `until` and the session that made or last renewed the claim, if
   any, as its id and label (a session without a label is identified by its id), so the member can see which sessions
   hold claims and which of those sessions are stale. The result is `{ count, claims }`.
@@ -137,5 +142,8 @@ beyond those given, the JSON shape of results beyond the fields above, and the t
   holder, `previousSession` on a renewal from a different session, a deactivated holder's claim is inactive, and only
   active claims are backed up.
 - **Force** is allowed to anyone with write access to the memory's scope. The alternative is admins only.
-- Duration default 60 and cap 1440 minutes, description at most 200 characters, advisory only, lazy expiry, and
+- Duration defaults to 60 minutes when omitted, with no cap beyond a 10-year sanity bound, and `indefinite: true` for a
+  claim with no end (the maintainer asked that the maximum not be short or fixed; the explicit indefinite option is my
+  reading of "could be undefined"). A stuck indefinite claim is cleared with `force` or by its holder, and `my_claims`
+  lists it. The description is at most 200 characters, advisory only, lazy expiry, and
   the latest renewing session being the one recorded.
