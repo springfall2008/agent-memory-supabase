@@ -14,7 +14,7 @@ import {
   handleUpdate,
   registerTools,
 } from '../../supabase/functions/_shared/tools.ts';
-import { STORE_BATCH_MAX } from '../../supabase/functions/_shared/limits.ts';
+import { NEIGHBOUR_SNIPPET_CHARS, STORE_BATCH_MAX } from '../../supabase/functions/_shared/limits.ts';
 import type {
   Embedder,
   Memory,
@@ -463,4 +463,48 @@ Deno.test('search and recall descriptions say that results carry links and a sup
     assertStringIncludes(d, 'superseded', `${tool} mentions superseded`);
     assertStringIncludes(d, 'neighbours', `${tool} points at neighbours`);
   }
+});
+
+Deno.test('handleNeighbours defaults to full memories and detail short swaps content for a snippet', async () => {
+  const long = 'x'.repeat(300);
+  const m = {
+    ...mem('m2'),
+    content: long,
+    links: [{ type: 'depends-on' as const, direction: 'in' as const, memoryId: 'm1' }],
+  };
+  const path = [{ type: 'depends-on' as const, direction: 'out' as const, memoryId: 'm2' }];
+  const { store } = mockStore({ neighbours: [{ memory: m, path }] });
+
+  const full = JSON.parse((await handleNeighbours(store)({ memory_id: 'm1' })).content[0].text);
+  assertEquals(full.results[0].memory.content, long);
+  assert(!('snippet' in full.results[0].memory));
+
+  const short = JSON.parse((await handleNeighbours(store)({ memory_id: 'm1', detail: 'short' })).content[0].text);
+  const sm = short.results[0].memory;
+  assert(!('content' in sm), 'short results carry no content');
+  assertEquals(sm.snippet, 'x'.repeat(NEIGHBOUR_SNIPPET_CHARS) + '…');
+  assertEquals(sm.id, 'm2');
+  assertEquals(sm.scope, 's');
+  assertEquals(sm.links, m.links);
+  assertEquals(short.results[0].path, path);
+  assertEquals(short.count, 1);
+});
+
+Deno.test('a short snippet is the whole content when it is short enough, with no ellipsis', async () => {
+  const { store } = mockStore({ neighbours: [{ memory: { ...mem('m2'), content: 'short note' }, path: [] }] });
+  const body = JSON.parse((await handleNeighbours(store)({ memory_id: 'm1', detail: 'short' })).content[0].text);
+  assertEquals(body.results[0].memory.snippet, 'short note');
+});
+
+Deno.test('the registered neighbours tool accepts detail short or full and rejects anything else', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered =
+    (server as unknown as { _registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }> })
+      ._registeredTools;
+  registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'short' });
+  registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'full' });
+  assertThrows(() => registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'tiny' }));
 });

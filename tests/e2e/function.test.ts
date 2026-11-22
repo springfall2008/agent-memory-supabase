@@ -149,6 +149,13 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(walked.results[0].memory.superseded, true);
       assertEquals(walked.results[0].path, [{ type: 'supersedes', direction: 'out', memoryId: older.id }]);
 
+      const brief = parse(
+        await c.callTool({ name: 'neighbours', arguments: { memory_id: newer.id, detail: 'short' } }),
+      );
+      assertEquals(brief.results[0].memory.id, older.id);
+      assertEquals(brief.results[0].memory.snippet, 'okapi migration plan, first draft');
+      assertEquals('content' in brief.results[0].memory, false);
+
       const found = parse(await c.callTool({ name: 'search', arguments: { query: 'okapi migration plan' } }));
       const hit = found.results.find((r: { memory: { id: string } }) => r.memory.id === older.id);
       assertEquals(hit.memory.superseded, true);
