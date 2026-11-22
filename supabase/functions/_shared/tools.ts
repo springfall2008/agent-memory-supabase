@@ -29,7 +29,7 @@ const filtersShape = {
   after: z.string().optional().describe('Filter: created after this ISO 8601 date'),
   before: z.string().optional().describe('Filter: created before this ISO 8601 date'),
   limit: z.number().optional().describe(
-    'Max results to return (default 10). With a query the cap is 100; without a query (browse mode) it is 1000',
+    'Max results to return (default 10). With a query the cap is 100; without a query (browse mode) it is 400',
   ),
 };
 

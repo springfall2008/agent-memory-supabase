@@ -27,7 +27,7 @@ export function checkLimit(n: number): void {
 }
 
 /** Page size cap for unranked browsing (search without a query): no embedding, decay or re-ranking, so it is cheap. */
-export const MAX_BROWSE_LIMIT = 1000;
+export const MAX_BROWSE_LIMIT = 400;
 
 /** A browse page size is an integer in 1..MAX_BROWSE_LIMIT. */
 export function checkBrowseLimit(n: number): void {

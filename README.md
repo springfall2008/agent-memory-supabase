@@ -54,7 +54,7 @@ Its `tags` filter keeps memories with at least one of the tags given; `tags_all`
 query such as "open work in this repo" (`tags_all: ["repo:<name>", "status:open"]`) needs no client-side filtering.
 The two can be combined.
 Leave out `query` and `search` browses instead of ranking: it lists every memory matching the filters, newest first,
-and pages with `limit` (up to 1000) and `offset`, returning `has_more`. Browsing does not count as an access, so it suits
+and pages with `limit` (up to 400) and `offset`, returning `has_more`. Browsing does not count as an access, so it suits
 a cleanup sweep. Offsets shift if memories are added or deleted while paging.
 Delete and prune are soft; rows are purged after 30 days.
 
@@ -355,7 +355,7 @@ CI (`.github/workflows/ci.yml`) runs everything except the end-to-end test.
   most 5 topics per call. Details are in the [spike results](docs/superpowers/specs/2026-11-07-embedding-spike-results.md).
 - **Size limits.** A memory's content is at most 20,000 characters (`store`, `store_batch`, `update`, import), and
   every result `limit` (`search` with a query, `find_related`, `list_recent`, `recall`) is between 1 and 100. A `search`
-  without a query (browse mode) accepts a `limit` up to 1000.
+  without a query (browse mode) accepts a `limit` up to 400.
 - **Free-tier pausing.** Free Supabase projects are paused after a period of inactivity. Unpause from the dashboard;
   the first request after that is slow.
 

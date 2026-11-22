@@ -398,13 +398,13 @@ Deno.test('browse does not bump access counts, unlike ranked search', () =>
     assertEquals(await count(), 1);
   }));
 
-Deno.test('browse limits go to 1000 and offsets must be non-negative integers', () =>
+Deno.test('browse limits go to 400 and offsets must be non-negative integers', () =>
   withWorld(async (w, _a, mk) => {
     const [rw] = mk(w.rw.id);
     await rw.store(w.alpha.name, req('lone memory'));
-    assertEquals((await rw.browse({ limit: 1000 })).memories.length, 1);
-    await assertRejects(() => rw.browse({ limit: 1001 }), Error, 'limit must be between 1 and 1000');
-    await assertRejects(() => rw.browse({ limit: 0 }), Error, 'limit must be between 1 and 1000');
+    assertEquals((await rw.browse({ limit: 400 })).memories.length, 1);
+    await assertRejects(() => rw.browse({ limit: 401 }), Error, 'limit must be between 1 and 400');
+    await assertRejects(() => rw.browse({ limit: 0 }), Error, 'limit must be between 1 and 400');
     await assertRejects(() => rw.browse({ offset: -1 }), Error, 'offset must be a non-negative integer');
     await assertRejects(() => rw.browse({ offset: 1.5 }), Error, 'offset must be a non-negative integer');
     await assertRejects(() => rw.browse({ after: 'not a date' }), Error, 'Invalid date filter');

@@ -63,7 +63,7 @@ counts.
 
 **Browse.** `search` with no query calls `PgMemoryStore.browse`, which skips `search_memories`, decay and
 `touch_accessed` entirely: a plain filtered `select` on `memory_view` ordered by `created_at desc, id`, paged in SQL
-with `limit`/`offset` (cap `MAX_BROWSE_LIMIT` = 1000, versus 100 for ranked reads). Ranked search has no offset, because
+with `limit`/`offset` (cap `MAX_BROWSE_LIMIT` = 400, versus 100 for ranked reads). Ranked search has no offset, because
 decay re-sorts after SQL.
 
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
