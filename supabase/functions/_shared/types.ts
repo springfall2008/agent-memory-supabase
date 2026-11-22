@@ -100,6 +100,17 @@ export interface SearchFilters {
   scopes?: string[];
 }
 
+/** Filters for unranked browsing: `limit` is the page size and `offset` the number of matches to skip. */
+export interface BrowseFilters extends SearchFilters {
+  offset?: number;
+}
+
+export interface BrowsePage {
+  memories: Memory[];
+  /** True when at least one more match follows this page. */
+  hasMore: boolean;
+}
+
 export type SearchMode = 'hybrid' | 'keyword' | 'semantic';
 
 // ── Dependency interfaces ──────────────────────────────────────────
@@ -115,6 +126,8 @@ export interface MemoryStore {
   storeBatch(scope: string, rs: StoreRequest[], s?: SessionRef): Promise<Memory[]>;
   /** `embedding`: precomputed vector; `null` = keyword-only. */
   search(query: string, mode: SearchMode, f: SearchFilters, embedding?: number[] | null): Promise<SearchResult[]>;
+  /** Unranked, newest-first listing of everything matching the filters. Does not count as an access. */
+  browse(f: BrowseFilters): Promise<BrowsePage>;
   findRelated(id: string, limit: number, scopes?: string[]): Promise<SearchResult[]>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;

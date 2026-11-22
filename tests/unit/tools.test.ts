@@ -29,7 +29,9 @@ const mem = (id: string, scope = 's'): Memory => ({
 // deno-lint-ignore no-explicit-any
 type Calls = Record<string, any[][]>;
 
-function mockStore(opts: { storeError?: Error } = {}): { store: MemoryStore; calls: Calls } {
+function mockStore(
+  opts: { storeError?: Error; browsePage?: Memory[]; browseHasMore?: boolean } = {},
+): { store: MemoryStore; calls: Calls } {
   const calls: Calls = {};
   const rec = (n: string, ...a: unknown[]) => (calls[n] ??= []).push(a);
   const store: MemoryStore = {
@@ -49,6 +51,10 @@ function mockStore(opts: { storeError?: Error } = {}): { store: MemoryStore; cal
     search: (q, mode, f, e) => {
       rec('search', q, mode, f, e);
       return Promise.resolve([]);
+    },
+    browse: (f) => {
+      rec('browse', f);
+      return Promise.resolve({ memories: opts.browsePage ?? [], hasMore: opts.browseHasMore ?? false });
     },
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
@@ -191,6 +197,71 @@ Deno.test('the registered search tool accepts tags_all', () => {
   >;
   assertEquals(parsed.tags_all, ['b', 'c']);
   assertEquals(parsed.tags, ['a']);
+});
+
+Deno.test('handleSearch without a query browses: filters, offset and limit go to store.browse, not store.search', async () => {
+  const { store, calls } = mockStore({ browsePage: [mem('m1'), mem('m2')], browseHasMore: true });
+  const r = await handleSearch(store)({
+    tags_all: ['cleanup'],
+    category: 'other',
+    after: '2026-01-01',
+    offset: 40,
+    limit: 20,
+    scopes: ['a'],
+  });
+  assertEquals(calls.search, undefined);
+  const f = calls.browse[0][0];
+  assertEquals(f.tagsAll, ['cleanup']);
+  assertEquals(f.category, 'other');
+  assertEquals(f.after, '2026-01-01');
+  assertEquals(f.offset, 40);
+  assertEquals(f.limit, 20);
+  assertEquals(f.scopes, ['a']);
+  const body = JSON.parse(r.content[0].text);
+  assertEquals(body.count, 2);
+  assertEquals(body.has_more, true);
+  assertEquals(body.offset, 40);
+  assertEquals(body.results.map((x: { memory: Memory }) => x.memory.id), ['m1', 'm2']);
+  assert(body.results.every((x: Record<string, unknown>) => !('score' in x)));
+});
+
+Deno.test('handleSearch treats an empty or whitespace query as browse', async () => {
+  const { store, calls } = mockStore();
+  await handleSearch(store)({ query: '' });
+  await handleSearch(store)({ query: '   ' });
+  assertEquals(calls.search, undefined);
+  assertEquals(calls.browse.length, 2);
+  assertEquals(calls.browse[0][0].offset, undefined);
+});
+
+Deno.test('handleSearch with a query still ranks and has no has_more', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleSearch(store)({ query: 'q' });
+  assertEquals(calls.browse, undefined);
+  assertEquals(calls.search.length, 1);
+  assert(!('has_more' in JSON.parse(r.content[0].text)));
+});
+
+Deno.test('handleSearch rejects offset together with a query and does not touch the store', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleSearch(store)({ query: 'q', offset: 10 });
+  assertEquals((r as { isError?: boolean }).isError, true);
+  assertStringIncludes(r.content[0].text, 'offset is only supported without a query');
+  assertEquals(calls.search, undefined);
+  assertEquals(calls.browse, undefined);
+});
+
+Deno.test('the registered search tool makes query optional and accepts offset', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered =
+    (server as unknown as { _registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }> })
+      ._registeredTools;
+  const parsed = registered.search.inputSchema.parse({ tags_all: ['a'], offset: 5 }) as Record<string, unknown>;
+  assertEquals(parsed.offset, 5);
+  assertEquals(parsed.query, undefined);
 });
 
 Deno.test('handleUpdate with only tags passes only tags', async () => {

@@ -1,7 +1,7 @@
 import { z } from 'npm:zod@4.6.7';
 import type { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import type { PgThreadStore } from './thread-store.ts';
-import { checkLimit, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX } from './limits.ts';
+import { checkLimit, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
 import {
   type Embedder,
   MEMORY_CATEGORIES,
@@ -28,7 +28,9 @@ const filtersShape = {
   tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
   after: z.string().optional().describe('Filter: created after this ISO 8601 date'),
   before: z.string().optional().describe('Filter: created before this ISO 8601 date'),
-  limit: z.number().optional().describe('Max results to return (default 10)'),
+  limit: z.number().optional().describe(
+    'Max results to return (default 10). With a query the cap is 100; without a query (browse mode) it is 400',
+  ),
 };
 
 const modeSchema = z
@@ -119,7 +121,7 @@ export function handleStoreBatch(store: MemoryStore) {
 
 export function handleSearch(store: MemoryStore) {
   return async (args: {
-    query: string;
+    query?: string;
     mode?: SearchMode;
     category?: MemoryCategory;
     tags?: string[];
@@ -127,9 +129,30 @@ export function handleSearch(store: MemoryStore) {
     after?: string;
     before?: string;
     limit?: number;
+    offset?: number;
     scopes?: string[];
   }) => {
     try {
+      // No query means no ranking: list everything matching the filters, newest first, and allow paging.
+      if (!args.query?.trim()) {
+        const page = await store.browse({
+          category: args.category,
+          tags: args.tags,
+          tagsAll: args.tags_all,
+          after: args.after,
+          before: args.before,
+          limit: args.limit,
+          offset: args.offset,
+          scopes: scopesOrUndefined(args.scopes),
+        });
+        return success({
+          count: page.memories.length,
+          offset: args.offset ?? 0,
+          has_more: page.hasMore,
+          results: page.memories.map((memory) => ({ memory })),
+        });
+      }
+      if (args.offset !== undefined) throw new StoreError('offset is only supported without a query');
       const results = await store.search(args.query, args.mode ?? 'hybrid', {
         category: args.category,
         tags: args.tags,
@@ -317,11 +340,19 @@ export function registerTools(
 
   server.registerTool('search', {
     description:
-      'Search memories by meaning and/or keywords. Default mode is hybrid (BM25 + vector). Returns ranked results with relevance scores.',
+      'Search memories by meaning and/or keywords. Default mode is hybrid (BM25 + vector). Returns ranked results with relevance scores. ' +
+      'Omit the query to browse instead: every memory matching the filters, newest first, with no ranking, paged by limit and offset ' +
+      '(has_more says whether another page follows). Browsing does not count as access, so use it to sweep for cleanup. ' +
+      'Offsets shift if you delete or add memories while paging; after deleting, re-fetch from the same offset or page from the end.',
     inputSchema: z.object({
-      query: z.string().describe('What to search for — a concept, phrase, or question'),
+      query: z.string().optional().describe(
+        'What to search for — a concept, phrase, or question. Omit (or leave empty) to browse without ranking',
+      ),
       mode: modeSchema,
       ...filtersShape,
+      offset: z.number().optional().describe(
+        'Browse mode only (no query): number of matches to skip, for paging (default 0)',
+      ),
       scopes: scopesSchema,
     }),
   }, handleSearch(store));
