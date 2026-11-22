@@ -513,6 +513,7 @@ export class PgMemoryStore implements MemoryStore {
       const memories = await tx<Row[]>`
         select * from agent_memory.memory_view where id = any(${page.map((r) => r.id)}::uuid[])`;
       const byId = new Map(memories.map((m) => [m.id as string, rowToMemory(m)]));
+      await this.addLinks(tx, [...byId.values()]);
       return {
         neighbours: page.map((r) => ({ memory: byId.get(r.id)!, path: r.path })),
         truncated: rows.length > NEIGHBOURS_MAX_RESULTS,

@@ -292,3 +292,17 @@ Deno.test('a hub keeps its superseded flag and true count when the supersedes li
     assertEquals(h.moreLinks, 140);
     assertEquals(h.superseded, true);
   }));
+
+Deno.test('neighbours results carry links and the superseded flag', () =>
+  withWorld(async (w, _a, mk) => {
+    const [s] = mk(w.rw.id);
+    const a = await s.store(w.alpha.name, req('start here'));
+    const b = await s.store(w.alpha.name, req('followed memory'));
+    const c = await s.store(w.alpha.name, req('newer replacement'));
+    await s.relate(a.id, b.id, 'relates-to');
+    await s.relate(c.id, b.id, 'supersedes');
+    const r = await s.neighbours(a.id, {});
+    const reached = pick(r.neighbours.map((n) => n.memory), b.id);
+    assertEquals(reached.superseded, true);
+    assertEquals(reached.links?.length, 2);
+  }));
