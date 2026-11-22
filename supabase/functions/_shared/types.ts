@@ -40,6 +40,49 @@ export interface Memory {
   moreLinks?: number;
   /** True when a visible `supersedes` link points at this memory. */
   superseded?: true;
+  /** The active claim on this memory, if someone is working on it. */
+  claim?: MemoryClaim;
+}
+
+// ── Claims ─────────────────────────────────────────────────────────
+
+export interface ClaimSession {
+  id: string;
+  label: string | null;
+}
+
+export interface MemoryClaim {
+  /** The holder's display name. */
+  by: string;
+  /** When the claim ends; null for an indefinite claim. */
+  until: string | null;
+  description: string;
+  /** Present, and the session shown, only when the caller holds the claim. */
+  mine?: true;
+  session?: ClaimSession;
+}
+
+export interface ClaimOptions {
+  minutes?: number;
+  indefinite?: boolean;
+  force?: boolean;
+}
+
+export interface ClaimResult {
+  claimed: true;
+  until: string | null;
+  /** The other member's claim that `force` replaced. */
+  overridden?: { by: string; until: string | null; description: string };
+  /** The session recorded before, when the same member renewed from a different session. */
+  previousSession?: ClaimSession;
+}
+
+export interface MyClaim {
+  memory: { id: string; scope: string; category: MemoryCategory; tags: string[]; snippet: string };
+  description: string;
+  claimedAt: string;
+  until: string | null;
+  session?: ClaimSession;
 }
 
 // ── Memory links ───────────────────────────────────────────────────
@@ -170,6 +213,9 @@ export interface MemoryStore {
   relate(from: string, to: string, type: LinkType): Promise<void>;
   unrelate(from: string, to: string, type: LinkType): Promise<boolean>;
   neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult>;
+  claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult>;
+  release(id: string, force?: boolean): Promise<boolean>;
+  myClaims(scopes?: string[]): Promise<MyClaim[]>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;
   delete(id: string): Promise<void>;

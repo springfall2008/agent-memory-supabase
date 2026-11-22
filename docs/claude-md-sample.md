@@ -29,6 +29,8 @@ scope as public: it may be quoted.
   memory with any of the tags. `tags_all` requires every one, so `tags_all=["repo:<name>", "status:open"]` gives one
   repo's open work without filtering on the client.
 - If a status memory names a thread session label, call `whats_new` with that label before carrying on.
+- Call `my_claims` to see the work you already hold. A claim made by a session you no longer recognise is probably
+  stale: release it or pick the work up.
 
 ### Work status
 
@@ -77,6 +79,16 @@ memory's `links`, and `neighbours` follows them. Link when the relationship is w
 - `relates-to`: anything else that belongs together.
 
 A memory flagged `superseded: true` has been replaced; follow its `supersedes` link to the newer one.
+
+### Claims
+
+Before starting work that another agent could also pick up, claim its status memory with `claim_memory`: give a short
+reason, pass your session label, and either `minutes` for how long you expect to need or `indefinite: true` for work
+that may pause for days. If the memory is already claimed, someone else is on it: pick something else, or ask before
+using `force`. Release the claim with `release_claim` when the work is done or parked. A memory in search results with a
+`claim` is taken. `claim.mine` means your member holds it, which includes other agents sharing your token: check that
+`claim.session` is your own session before treating it as yours, and if `claim_memory` returns `previousSession`,
+another session of your member was working on it.
 
 ### Threads
 

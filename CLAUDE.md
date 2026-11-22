@@ -37,8 +37,8 @@ boot a half-written file and fail with BOOT_ERROR or "Unexpected eof".
   `resolve_member`, which hashes the token and requires an unrevoked, unexpired token of a non-deactivated member. It
   returns `{ memberId, isAdmin }`. Identity comes only from the token; nothing in the request body or headers can name a
   member.
-- **MCP server:** a fresh, stateless McpServer is built per request. `registerTools` (`_shared/tools.ts`) adds the 14
-  memory tools, and `registerThreadTools` (`_shared/thread-tools.ts`) the 11 thread tools, so every member gets 25.
+- **MCP server:** a fresh, stateless McpServer is built per request. `registerTools` (`_shared/tools.ts`) adds the 17
+  memory tools, and `registerThreadTools` (`_shared/thread-tools.ts`) the 11 thread tools, so every member gets 28.
   `registerAdminTools` (`_shared/admin-tools.ts`) adds the 13 `admin_` tools for admins only.
 - **`/embed`:** `POST …/embed` returns a gte-small vector for the importer.
 
@@ -75,6 +75,15 @@ of the memory's scope can trigger, because `relates-to` is stored from the end t
 `links`, `moreLinks` and `superseded` to search, browse, `find_related` and `list_recent` results with one batched query
 per result set. A superseded memory is flagged, not demoted. Design:
 `docs/superpowers/specs/2026-11-22-memory-links-design.md`.
+
+**Claims.** `memory_claims` holds at most one claim per memory (primary key `memory_id`): member, optional session,
+reason, `claimed_at`, `expires_at` (null = indefinite). A claim is active while unexpired, its memory is readable and
+undeleted (the select policy), and `claim_holder_active` says its member is not deactivated. `claim_memory` and
+`release_claim` take an advisory lock per memory, so two callers cannot both find it free; the holder is the member, and
+the session is information shown only to the holder. `PgMemoryStore.addClaims` attaches `claim` next to every `addLinks`
+call, from one batched `memory_claims_for` query. Claims never block `update` or `delete`. A pre-migration backup must
+use the pre-claims `backup.ts`, because the new one reads `memory_claims`. Design:
+`docs/superpowers/specs/2026-11-22-memory-claims-design.md`.
 
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in

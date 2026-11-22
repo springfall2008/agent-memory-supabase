@@ -1,7 +1,16 @@
 import { z } from 'npm:zod@4.6.7';
 import type { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import type { PgThreadStore } from './thread-store.ts';
-import { checkLimit, NEIGHBOUR_SNIPPET_CHARS, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
+import {
+  checkLimit,
+  CLAIM_DEFAULT_MINUTES,
+  CLAIM_DESCRIPTION_MAX,
+  NEIGHBOUR_SNIPPET_CHARS,
+  RECALL_EMBED_TOPICS_MAX,
+  snippet,
+  STORE_BATCH_MAX,
+  StoreError,
+} from './limits.ts';
 import {
   type Embedder,
   LINK_TYPES,
@@ -229,6 +238,51 @@ export function handleFindRelated(store: MemoryStore) {
   };
 }
 
+export function handleClaim(store: MemoryStore) {
+  return async (
+    args: {
+      memory_id: string;
+      description: string;
+      minutes?: number;
+      indefinite?: boolean;
+      force?: boolean;
+    } & SessionArgs,
+  ) => {
+    try {
+      const result = await store.claim(
+        args.memory_id,
+        args.description,
+        { minutes: args.minutes, indefinite: args.indefinite, force: args.force },
+        sessionRef(args),
+      );
+      return success(result);
+    } catch (err) {
+      return error('Claim failed', err);
+    }
+  };
+}
+
+export function handleRelease(store: MemoryStore) {
+  return async (args: { memory_id: string; force?: boolean }) => {
+    try {
+      return success({ released: await store.release(args.memory_id, args.force === true) });
+    } catch (err) {
+      return error('Release failed', err);
+    }
+  };
+}
+
+export function handleMyClaims(store: MemoryStore) {
+  return async (args: { scopes?: string[] }) => {
+    try {
+      const claims = await store.myClaims(scopesOrUndefined(args.scopes));
+      return success({ count: claims.length, claims });
+    } catch (err) {
+      return error('My claims failed', err);
+    }
+  };
+}
+
 export function handleRelate(store: MemoryStore) {
   return async (args: { from_id: string; to_id: string; type: LinkType }) => {
     try {
@@ -270,10 +324,7 @@ export function handleNeighbours(store: MemoryStore) {
       const results = args.detail === 'short'
         ? r.neighbours.map(({ memory, path }) => {
           const { content, ...rest } = memory;
-          const snippet = content.length > NEIGHBOUR_SNIPPET_CHARS
-            ? content.slice(0, NEIGHBOUR_SNIPPET_CHARS) + '…'
-            : content;
-          return { memory: { ...rest, snippet }, path };
+          return { memory: { ...rest, snippet: snippet(content, NEIGHBOUR_SNIPPET_CHARS) }, path };
         })
         : r.neighbours;
       return success({ count: r.neighbours.length, truncated: r.truncated, results });
@@ -399,6 +450,7 @@ export function registerTools(
     description:
       'Search memories by meaning and/or keywords. Default mode is hybrid (BM25 + vector). Returns ranked results with relevance scores. ' +
       'Each memory shows its `links` to other memories and `superseded: true` when a newer memory replaces it; call `neighbours` to follow links. ' +
+      'A memory someone is working on shows its active `claim` (who, until when, why). ' +
       'Omit the query to browse instead: every memory matching the filters, newest first, with no ranking, paged by limit and offset ' +
       '(has_more says whether another page follows). Browsing does not count as access, so use it to sweep for cleanup. ' +
       'Offsets shift if you delete or add memories while paging; after deleting, re-fetch from the same offset or page from the end.',
@@ -417,7 +469,7 @@ export function registerTools(
 
   server.registerTool('recall', {
     description:
-      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently. Returned memories show their `links` to other memories and `superseded: true` when a newer memory replaces them; call `neighbours` to follow links.',
+      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently. Returned memories show their `links` to other memories and `superseded: true` when a newer memory replaces them; call `neighbours` to follow links. A memory someone is working on shows its active `claim`.',
     inputSchema: z.object({
       topics: z.array(z.string()).describe('List of topics to search for'),
       include_recent: z.number().optional().describe('Number of recent memories to include (default 5)'),
@@ -481,6 +533,40 @@ export function registerTools(
       scopes: scopesSchema,
     }),
   }, handleNeighbours(store));
+
+  server.registerTool('claim_memory', {
+    description:
+      'Claim a memory to say you are working on it, so other agents see it is taken before they start. The claim shows on the memory in search, recall and list results. Claims are advisory: they never stop anyone reading, updating or deleting the memory. ' +
+      `It lasts \`minutes\` (default ${CLAIM_DEFAULT_MINUTES} minutes, no fixed maximum, so a week is 10080) or, with \`indefinite\`, until released. ` +
+      'Claiming a memory you already hold renews it. Claiming one another member holds fails and says who holds it, until when and why; `force` takes it over. ' +
+      "You need write access to the memory's scope. Pass your session so you can later tell which session made the claim. " +
+      "A claim belongs to the member, so agents that share a token count as one holder: before claiming, compare a memory's `claim.session` with your own, and if the result carries `previousSession`, another session of your member was working on it.",
+    inputSchema: z.object({
+      memory_id: z.string().describe('ID of the memory to claim'),
+      description: z.string().describe(`Why you are claiming it, 1-${CLAIM_DESCRIPTION_MAX} characters`),
+      minutes: z.number().optional().describe(
+        `How long the claim lasts, in whole minutes (default ${CLAIM_DEFAULT_MINUTES})`,
+      ),
+      indefinite: z.boolean().optional().describe('Claim with no end, until released (not with minutes)'),
+      force: z.boolean().optional().describe("Take over another member's active claim"),
+      ...sessionShape,
+    }),
+  }, handleClaim(store));
+
+  server.registerTool('release_claim', {
+    description:
+      "Release your claim on a memory when the work is done or parked. Releasing another member's claim needs force. Returns whether an active claim was released.",
+    inputSchema: z.object({
+      memory_id: z.string().describe('ID of the claimed memory'),
+      force: z.boolean().optional().describe("Release another member's claim"),
+    }),
+  }, handleRelease(store));
+
+  server.registerTool('my_claims', {
+    description:
+      'List the claims you hold, soonest end first and indefinite ones last, each with a snippet of its memory and the session that made or last renewed it. Use at session start, and to spot claims left by stale sessions.',
+    inputSchema: z.object({ scopes: scopesSchema }),
+  }, handleMyClaims(store));
 
   server.registerTool('list_recent', {
     description:

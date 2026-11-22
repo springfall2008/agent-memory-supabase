@@ -393,6 +393,77 @@ Deno.test('scoped backup drops memory links to memories outside the scope', () =
     assertEquals((await db`select count(*)::int as n from agent_memory.memory_links`)[0].n, 1);
   }));
 
+const claimRows = (db: DbSql) =>
+  db`select memory_id, member_id, session_id, description, claimed_at::text, expires_at::text
+    from agent_memory.memory_claims order by memory_id`;
+
+Deno.test('backup round-trips active memory claims', () =>
+  withEmptyDb(async (db) => {
+    const ids = await seedThreads(db);
+    const [ann] = await db`select id from agent_memory.members where display_name = 'th-ann'`;
+    const [bot] = await db`select id from agent_memory.members where display_name = 'th-bot'`;
+    const [alpha] = await db`select id from agent_memory.scopes where name = 'th-alpha'`;
+    const [old] = await db`insert into agent_memory.memories
+      (scope_id, content, category, tags, created_by, updated_by, embedding)
+      values (${alpha.id}, 'an old ticket', 'learning', ${db.array(['t'], 1009)}, ${ann.id}, ${ann.id},
+              ${vec(7)}::extensions.vector) returning id`;
+    await db`insert into agent_memory.memory_claims (memory_id, member_id, session_id, description, claimed_at, expires_at)
+      values (${ids.mA}, ${ann.id}, ${ids.s1}, 'timed claim', '2026-05-01 00:00:01.123456+00', now() + interval '1 day'),
+             (${ids.mB}, ${bot.id}, null, 'indefinite claim', '2026-05-01 00:00:02.234567+00', null),
+             (${old.id}, ${ann.id}, null, 'expired claim', now() - interval '2 hours', now() - interval '1 hour')`;
+    const active = (await claimRows(db)).filter((r) => r.memory_id !== old.id);
+    assertEquals(active.length, 2);
+    const file = `${dir}/claims.json`;
+    const r1 = await cli('backup', '--out', file);
+    assertEquals(r1.code, 0, r1.err);
+    assertStringIncludes(r1.out, '2 memory claims');
+    const data = JSON.parse(await Deno.readTextFile(file));
+    assertEquals(data.memoryClaims.length, 2, 'the expired claim is not written');
+
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    const r2 = await cli('restore-backup', file);
+    assertEquals(r2.code, 0, r2.err);
+    assertStringIncludes(r2.out, '2 memory claims');
+    assertEquals([...(await claimRows(db))], active);
+
+    // a claim that has expired by restore time is skipped, and an unknown session is left empty
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    data.memoryClaims[0].expiresAt = '2020-01-01T00:00:00.000000Z';
+    data.memoryClaims[1].sessionId = crypto.randomUUID();
+    await restoreBackup(db, data);
+    const back = await claimRows(db);
+    assertEquals(back.length, 1);
+    assertEquals(back[0].session_id, null);
+  }));
+
+Deno.test('a scoped backup includes the sessions and members its claims reference', () =>
+  withEmptyDb(async (db) => {
+    const ids = await seedThreads(db);
+    const [cat] = await db`select id from agent_memory.members where display_name = 'th-cat'`;
+    const [s3] = await db`select id from agent_memory.agent_sessions where label = 'unrelated'`;
+    await db`insert into agent_memory.memory_claims (memory_id, member_id, session_id, description, expires_at)
+      values (${ids.mA}, ${cat.id}, ${s3.id}, 'cat is on it', now() + interval '1 day')`;
+    const file = `${dir}/claims-scoped.json`;
+    const r = await cli('backup', '--scope', 'th-alpha', '--out', file);
+    assertEquals(r.code, 0, r.err);
+    const d = JSON.parse(await Deno.readTextFile(file));
+    assertEquals(d.memoryClaims.length, 1);
+    assert(d.sessions.some((x: { id: string }) => x.id === s3.id), 'the claim session is in the file');
+    assert(
+      d.members.some((m: { displayName: string }) => m.displayName === 'th-cat'),
+      'the claim holder is in the file',
+    );
+
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    await restoreBackup(db, d);
+    const back = await claimRows(db);
+    assertEquals(back.length, 1);
+    assertEquals(back[0].session_id, s3.id);
+  }));
+
 Deno.test('remove the backup test directory', async () => {
   if (!keepDir) await Deno.remove(dir, { recursive: true });
 });

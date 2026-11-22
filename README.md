@@ -46,11 +46,12 @@ It is not a knowledge graph, and it is not a personal assistant's memory. For on
 
 ## Tools
 
-The server exposes 25 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
+The server exposes 28 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
 thread tools (see [Threads and sessions](#threads-and-sessions)). The memory tools are `list_scopes`, `store`, `store_batch`, `search`, `recall`, `find_related`,
 `list_recent`, `update`, `delete`, `stats` and `prune`, plus the three link tools `relate_memories`, `unrelate_memories`
-and `neighbours` (see [Memory links](#memory-links)). They match the original server, plus a `scope` argument on the
-write tools, and the link tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
+and `neighbours` (see [Memory links](#memory-links)), and the three claim tools `claim_memory`, `release_claim` and
+`my_claims` (see [Claims](#claims)). They match the original server, plus a `scope` argument on the write tools, and the
+link and claim tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
 Its `tags` filter keeps memories with at least one of the tags given; `tags_all` keeps only those with every one, so a
 query such as "open work in this repo" (`tags_all: ["repo:<name>", "status:open"]`) needs no client-side filtering.
 The two can be combined.
@@ -81,6 +82,27 @@ You need read access to both memories. `supersedes` needs write access to both s
 need write access to the `from` memory's scope; `relates-to` needs write access to either. Removing a link needs write
 access to either end's scope. A link is visible only to someone who can read both ends, so it never reveals a memory you
 cannot read, and the two memories may be in different scopes. A memory has at most 100 outgoing links.
+
+## Claims
+
+A **claim** says "I'm working on this" on a memory, typically a status memory for a task, so another agent sees the
+work is taken before starting it. `claim_memory` takes the memory, a short reason (up to 200 characters) and either
+`minutes` (default 60, no fixed maximum, so a week is `10080`) or `indefinite: true` for a claim with no end. Search,
+`recall`, `find_related`, `list_recent`, browse and `neighbours` show a claimed memory's `claim`: who holds it, until
+when and why.
+
+A claim belongs to a **member**. Claiming a memory you already hold renews it, from any of your sessions; the session
+that made or last renewed the claim is recorded and shown only to you, in `my_claims` and as `claim.session`, so you can
+spot claims left by stale sessions (a renewal from a different session reports `previousSession`). Claiming a memory
+another member holds fails and says who holds it; `force: true` takes it over. `release_claim` removes your claim, or
+someone else's with `force`. `my_claims` lists your active claims, soonest end first.
+
+Because a claim belongs to the member, agents that share one token count as one holder: the second agent's claim succeeds
+as a renewal. Give each agent its own session label, compare `claim.session` with your own before claiming, and treat
+a returned `previousSession` as "another session of this member was on it".
+
+Claiming and releasing need write access to the memory's scope. Claims are advisory: they never stop anyone reading,
+updating or deleting the memory. An expired claim, or one whose holder has been deactivated, counts as no claim.
 
 ## Threads and sessions
 

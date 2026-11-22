@@ -70,6 +70,18 @@ export interface Backup {
   subscriptions?: { sessionId: string; threadId: string; lastSeenSeq: number; subscribedAt: string }[];
   /** Absent in files written before memory links. `createdBy` is a display name. */
   memoryLinks?: { fromId: string; toId: string; type: string; createdBy: string; createdAt: string }[];
+  /**
+   * Absent in files written before memory claims. Only claims active when the backup was taken. `member` is a display
+   * name; `expiresAt` is null for an indefinite claim.
+   */
+  memoryClaims?: {
+    memoryId: string;
+    member: string;
+    sessionId: string | null;
+    description: string;
+    claimedAt: string;
+    expiresAt: string | null;
+  }[];
 }
 
 const USAGE = `Usage: deno run -A scripts/backup.ts <command> ...
@@ -84,7 +96,8 @@ const TS = (col: string) => `to_char(${col} at time zone 'utc', 'YYYY-MM-DD"T"HH
 /**
  * Read everything except token hashes. With `scope`, only that scope's memories, grants and threads (with their posts,
  * the thread links to memories in the backup, and subscriptions), the memory-to-memory links whose two ends are both in
- * the backup, the sessions those reference, and the members behind it all.
+ * the backup, the claims active now on memories in the backup, the sessions those reference, and the members behind it
+ * all.
  */
 export function exportBackup(sql: Sql, scope?: string): Promise<Backup> {
   // One repeatable-read snapshot, so a backup taken while writers are active is point-in-time consistent.
@@ -155,6 +168,15 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     where l.from_id = any(${memoryIds}::uuid[]) and l.to_id = any(${memoryIds}::uuid[])
     order by l.from_id, l.to_id, l.type`;
 
+  // Only claims active now, on memories in this backup.
+  const memoryClaims = await sql`
+    select c.memory_id as "memoryId", cm.display_name as member, c.session_id as "sessionId", c.description,
+           ${sql.unsafe(TS('c.claimed_at'))} as "claimedAt", ${sql.unsafe(TS('c.expires_at'))} as "expiresAt"
+    from agent_memory.memory_claims c join agent_memory.members cm on cm.id = c.member_id
+    where c.memory_id = any(${memoryIds}::uuid[])
+      and (c.expires_at is null or c.expires_at > now()) and cm.deactivated_at is null
+    order by c.memory_id`;
+
   const subscriptions = await sql`
     select sub.session_id as "sessionId", sub.thread_id as "threadId", sub.last_seen_seq as "lastSeenSeq",
            ${sql.unsafe(TS('sub.subscribed_at'))} as "subscribedAt"
@@ -173,6 +195,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     addSession(m.updatedSession);
   }
   for (const x of subscriptions) addSession(x.sessionId);
+  for (const c of memoryClaims) addSession(c.sessionId);
   const sessions = await sql`
     select se.id, m.display_name as member, se.label, ${sql.unsafe(TS('se.created_at'))} as "createdAt",
            ${sql.unsafe(TS('se.last_seen_at'))} as "lastSeenAt"
@@ -194,6 +217,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
   for (const p of threadPosts) wanted.add(p.author);
   for (const l of threadLinks) wanted.add(l.linkedBy);
   for (const l of memoryLinks) wanted.add(l.createdBy);
+  for (const c of memoryClaims) wanted.add(c.member);
   const members = await sql`
     select id, display_name as "displayName", kind, email, auth_user_id as "authUserId",
            ${sql.unsafe(TS('created_at'))} as "createdAt", is_admin as "isAdmin",
@@ -216,6 +240,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     threadLinks: [...threadLinks] as unknown as NonNullable<Backup['threadLinks']>,
     subscriptions: [...subscriptions] as unknown as NonNullable<Backup['subscriptions']>,
     memoryLinks: [...memoryLinks] as unknown as NonNullable<Backup['memoryLinks']>,
+    memoryClaims: [...memoryClaims] as unknown as NonNullable<Backup['memoryClaims']>,
   };
 }
 
@@ -308,6 +333,17 @@ export async function restoreBackup(sql: Sql, data: Backup): Promise<void> {
         insert into agent_memory.memory_links (from_id, to_id, type, created_by, created_at)
         values (${l.fromId}, ${l.toId}, ${l.type}, ${memberId(l.createdBy)}, (${l.createdAt}::text)::timestamptz)`;
     }
+    // Claims that have expired since the backup are skipped; a session not in the file is left empty.
+    const sessionIds = new Set((data.sessions ?? []).map((se) => se.id));
+    for (const c of data.memoryClaims ?? []) {
+      if (c.expiresAt !== null && Date.parse(c.expiresAt) <= Date.now()) continue;
+      await tx`
+        insert into agent_memory.memory_claims (memory_id, member_id, session_id, description, claimed_at, expires_at)
+        values (${c.memoryId}, ${memberId(c.member)}, ${
+        c.sessionId && sessionIds.has(c.sessionId) ? c.sessionId : null
+      },
+                ${c.description}, (${c.claimedAt}::text)::timestamptz, (${c.expiresAt}::text)::timestamptz)`;
+    }
     for (const x of data.subscriptions ?? []) {
       await tx`
         insert into agent_memory.thread_subscriptions (session_id, thread_id, last_seen_seq, subscribed_at)
@@ -349,7 +385,7 @@ async function main(): Promise<void> {
         `Wrote ${out}: ${data.scopes.length} scopes, ${data.members.length} members, ` +
           `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
             data.memoryLinks?.length ?? 0
-          } memory links`,
+          } memory links, ${data.memoryClaims?.length ?? 0} memory claims`,
       );
     } else {
       const data = JSON.parse(await Deno.readTextFile(p[0])) as Backup;
@@ -358,7 +394,7 @@ async function main(): Promise<void> {
         `Restored ${data.scopes.length} scopes, ${data.members.length} members, ` +
           `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
             data.memoryLinks?.length ?? 0
-          } memory links`,
+          } memory links, ${data.memoryClaims?.length ?? 0} memory claims`,
       );
     }
   } finally {

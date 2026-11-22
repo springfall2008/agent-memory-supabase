@@ -47,6 +47,26 @@ export const NEIGHBOURS_MAX_RESULTS = 100;
 /** `neighbours` with detail 'short' returns this many characters of each memory's content. */
 export const NEIGHBOUR_SNIPPET_CHARS = 160;
 
+/** The first `max` characters of `text`, with an ellipsis only when something was cut. */
+export function snippet(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+
+/** Claims: minutes when none is given, the sanity bound (10 years), and the reason's length. */
+export const CLAIM_DEFAULT_MINUTES = 60;
+export const CLAIM_MAX_MINUTES = 5_256_000;
+export const CLAIM_DESCRIPTION_MAX = 200;
+/** `my_claims` returns at most this many claims, each with a snippet of this many characters. */
+export const MY_CLAIMS_MAX = 100;
+export const CLAIM_SNIPPET_CHARS = 160;
+
+/** A claim lasts 1..CLAIM_MAX_MINUTES whole minutes (mirrored by the SQL function claim_memory). */
+export function checkClaimMinutes(n: number): void {
+  if (!Number.isInteger(n) || n < 1 || n > CLAIM_MAX_MINUTES) {
+    throw new StoreError(`minutes must be between 1 and ${CLAIM_MAX_MINUTES}`);
+  }
+}
+
 /** A neighbour walk goes 1..NEIGHBOURS_MAX_DEPTH hops. */
 export function checkDepth(n: number): void {
   if (!Number.isInteger(n) || n < 1 || n > NEIGHBOURS_MAX_DEPTH) {
