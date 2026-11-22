@@ -61,6 +61,11 @@ with RRF (k = 60), filtered inside each arm, and return at most `p_limit` rows. 
 `limit`. There is deliberately no ANN index: post-filtering an HNSW index under RLS gave short pages and leaked result
 counts.
 
+**Browse.** `search` with no query calls `PgMemoryStore.browse`, which skips `search_memories`, decay and
+`touch_accessed` entirely: a plain filtered `select` on `memory_view` ordered by `created_at desc, id`, paged in SQL
+with `limit`/`offset` (cap `MAX_BROWSE_LIMIT` = 1000, versus 100 for ranked reads). Ranked search has no offset, because
+decay re-sorts after SQL.
+
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in
 `_shared/limits.ts`. A 546 means the platform recycled a busy worker: retry once.

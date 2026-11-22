@@ -19,10 +19,27 @@ export const PRUNE_MAX_DORMANT_DAYS_DEFAULT = 90;
 /** A caller error whose message is safe to show the agent as-is. */
 export class StoreError extends Error {}
 
-/** Every result limit is an integer in 1..MAX_LIMIT. */
+/** Every ranked result limit is an integer in 1..MAX_LIMIT. */
 export function checkLimit(n: number): void {
   if (!Number.isInteger(n) || n < 1 || n > MAX_LIMIT) {
     throw new StoreError(`limit must be between 1 and ${MAX_LIMIT}`);
+  }
+}
+
+/** Page size cap for unranked browsing (search without a query): no embedding, decay or re-ranking, so it is cheap. */
+export const MAX_BROWSE_LIMIT = 1000;
+
+/** A browse page size is an integer in 1..MAX_BROWSE_LIMIT. */
+export function checkBrowseLimit(n: number): void {
+  if (!Number.isInteger(n) || n < 1 || n > MAX_BROWSE_LIMIT) {
+    throw new StoreError(`limit must be between 1 and ${MAX_BROWSE_LIMIT}`);
+  }
+}
+
+/** A browse offset is a non-negative integer. */
+export function checkOffset(n: number): void {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new StoreError('offset must be a non-negative integer');
   }
 }
 

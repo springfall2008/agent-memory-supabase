@@ -3,8 +3,10 @@ import { type Sql, withMember } from './db.ts';
 import { isUuid } from './thread-store.ts';
 import { applyDecay, importanceMultiplier, isEvergreen, parseDecayHalfLife } from './decay.ts';
 import {
+  checkBrowseLimit,
   checkContent,
   checkLimit,
+  checkOffset,
   DEFAULT_LIMIT,
   OVER_FETCH_FACTOR,
   PRUNE_MAX_DORMANT_DAYS_DEFAULT,
@@ -13,6 +15,8 @@ import {
   StoreError,
 } from './limits.ts';
 import type {
+  BrowseFilters,
+  BrowsePage,
   Embedder,
   Memory,
   MemoryCategory,
@@ -364,6 +368,38 @@ export class PgMemoryStore implements MemoryStore {
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
       return results;
+    });
+  }
+
+  /**
+   * Unranked listing for sweeps: every readable memory matching the filters, newest first (`created_at desc, id`, a
+   * total order, so pages never overlap). Paged in SQL; no embedding, no decay, and no access-count bump, so a cleanup
+   * scan does not change what prune and decay see. Fetches one extra row to learn `hasMore`.
+   */
+  async browse(f: BrowseFilters): Promise<BrowsePage> {
+    const limit = f.limit ?? DEFAULT_LIMIT;
+    const offset = f.offset ?? 0;
+    checkBrowseLimit(limit);
+    checkOffset(offset);
+    for (const d of [f.after, f.before]) {
+      if (d !== undefined && Number.isNaN(Date.parse(d))) throw new StoreError('Invalid date filter');
+    }
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, f.scopes);
+      if (scopeIds.length === 0) return { memories: [], hasMore: false };
+      const rows = await tx<Row[]>`
+        select * from agent_memory.memory_view
+        where scope_id = any(${scopeIds}::uuid[])
+          and (${f.category ?? null}::text is null or category = ${f.category ?? null}::text)
+          and (${f.tags?.length ? tx.array(f.tags) : null}::text[] is null
+               or tags && ${f.tags?.length ? tx.array(f.tags) : null}::text[])
+          and (${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[] is null
+               or tags @> ${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[])
+          and (${f.after ?? null}::timestamptz is null or created_at >= ${f.after ?? null}::timestamptz)
+          and (${f.before ?? null}::timestamptz is null or created_at <= ${f.before ?? null}::timestamptz)
+        order by created_at desc, id
+        limit ${limit + 1} offset ${offset}`;
+      return { memories: rows.slice(0, limit).map(rowToMemory), hasMore: rows.length > limit };
     });
   }
 

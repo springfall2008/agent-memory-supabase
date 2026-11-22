@@ -331,3 +331,83 @@ Deno.test('search results carry session labels', () =>
     const recent = await s.listRecent(10);
     assertEquals(recent.find((x) => x.id === m.id)!.createdSession, 'read-sess');
   }));
+
+Deno.test('browse pages through a tag filter newest first with no overlap, gaps or ranking', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw, e] = mk(w.rw.id);
+    const swept: string[] = [];
+    for (let i = 0; i < 5; i++) swept.push((await rw.store(w.alpha.name, req(`sweep note ${i}`, ['sweep']))).id);
+    await rw.store(w.alpha.name, req('other note', ['keep']));
+    const newestFirst = [...swept].reverse();
+    const embedCalls = e.calls;
+
+    const p1 = await rw.browse({ tags: ['sweep'], limit: 2 });
+    assertEquals(p1.memories.map((m) => m.id), newestFirst.slice(0, 2));
+    assertEquals(p1.hasMore, true);
+    const p2 = await rw.browse({ tags: ['sweep'], limit: 2, offset: 2 });
+    assertEquals(p2.memories.map((m) => m.id), newestFirst.slice(2, 4));
+    assertEquals(p2.hasMore, true);
+    const p3 = await rw.browse({ tags: ['sweep'], limit: 2, offset: 4 });
+    assertEquals(p3.memories.map((m) => m.id), newestFirst.slice(4));
+    assertEquals(p3.hasMore, false);
+    assertEquals((await rw.browse({ tags: ['sweep'], limit: 2, offset: 50 })).memories, []);
+    assertEquals(e.calls, embedCalls, 'browse must not embed');
+  }));
+
+Deno.test('browse says hasMore is false when the last page is exactly full', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    await rw.store(w.alpha.name, req('one', ['sweep']));
+    await rw.store(w.alpha.name, req('two', ['sweep']));
+    const page = await rw.browse({ tags: ['sweep'], limit: 2 });
+    assertEquals(page.memories.length, 2);
+    assertEquals(page.hasMore, false);
+  }));
+
+Deno.test('browse with no filters lists every readable memory and honours every filter', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const a = await rw.store(w.alpha.name, req('alpha one', ['x', 'y'], 'learning'));
+    const b = await rw.store(w.alpha.name, req('alpha two', ['x']));
+    await admin`update agent_memory.memories set created_at = now() - interval '10 days' where id = ${a.id}`;
+    const ids = (p: { memories: { id: string }[] }) => p.memories.map((m) => m.id);
+
+    assertEquals(ids(await rw.browse({})), [b.id, a.id]);
+    assertEquals(ids(await rw.browse({ category: 'learning' })), [a.id]);
+    assertEquals(ids(await rw.browse({ tags: ['y', 'zzz'] })), [a.id]);
+    assertEquals(ids(await rw.browse({ tagsAll: ['x', 'y'] })), [a.id]);
+    assertEquals(ids(await rw.browse({ tagsAll: ['x'] })), [b.id, a.id]);
+    assertEquals(ids(await rw.browse({ scopes: [w.alpha.name] })), [b.id, a.id]);
+    const cutoff = new Date(Date.now() - 5 * 86_400_000).toISOString();
+    assertEquals(ids(await rw.browse({ after: cutoff })), [b.id]);
+    assertEquals(ids(await rw.browse({ before: cutoff })), [a.id]);
+    assertEquals(await mk(w.none.id)[0].browse({}), { memories: [], hasMore: false });
+  }));
+
+Deno.test('browse does not bump access counts, unlike ranked search', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('okapi sweep candidate', ['sweep']));
+    // access counting only applies to memories idle for over an hour; age it so the ranked control below counts
+    await setUpdated(admin, m.id, '2 hours');
+    const count = async () =>
+      (await admin`select access_count from agent_memory.memories where id = ${m.id}`)[0].access_count as number;
+    await rw.browse({ tags: ['sweep'] });
+    assertEquals(await count(), 0);
+    await rw.search('okapi', 'keyword', {});
+    assertEquals(await count(), 1);
+  }));
+
+Deno.test('browse limits go to 1000 and offsets must be non-negative integers', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    await rw.store(w.alpha.name, req('lone memory'));
+    assertEquals((await rw.browse({ limit: 1000 })).memories.length, 1);
+    await assertRejects(() => rw.browse({ limit: 1001 }), Error, 'limit must be between 1 and 1000');
+    await assertRejects(() => rw.browse({ limit: 0 }), Error, 'limit must be between 1 and 1000');
+    await assertRejects(() => rw.browse({ offset: -1 }), Error, 'offset must be a non-negative integer');
+    await assertRejects(() => rw.browse({ offset: 1.5 }), Error, 'offset must be a non-negative integer');
+    await assertRejects(() => rw.browse({ after: 'not a date' }), Error, 'Invalid date filter');
+    // ranked search keeps its 100 cap
+    await assertRejects(() => rw.search('lone', 'keyword', { limit: 101 }), Error, 'limit must be between 1 and 100');
+  }));
