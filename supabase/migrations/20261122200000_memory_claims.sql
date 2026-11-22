@@ -159,3 +159,51 @@ revoke execute on function agent_memory.release_claim(uuid, boolean) from public
 grant execute on function agent_memory.claim_holder_active(uuid) to agent_memory_member;
 grant execute on function agent_memory.claim_memory(uuid, text, int, boolean, boolean, uuid) to agent_memory_member;
 grant execute on function agent_memory.release_claim(uuid, boolean) to agent_memory_member;
+
+-- ===== 3. Read functions (security invoker: row-level security decides what is visible) =====
+
+-- The active claim, if any, on each visible memory in p_ids. The session is returned only to the holder.
+create function agent_memory.memory_claims_for(p_ids uuid[])
+returns table (
+  memory_id uuid, holder text, expires_at timestamptz, description text, mine boolean, session_id uuid,
+  session_label text
+)
+language sql stable security invoker
+set search_path = ''
+as $$
+  select c.memory_id, agent_memory.member_name(c.member_id), c.expires_at, c.description,
+         c.member_id = agent_memory.current_member_id(),
+         case when c.member_id = agent_memory.current_member_id() then c.session_id end,
+         case when c.member_id = agent_memory.current_member_id() then s.label end
+  from agent_memory.memory_claims c
+  left join agent_memory.agent_sessions s on s.id = c.session_id
+  where c.memory_id = any (p_ids)
+    and (c.expires_at is null or c.expires_at > pg_catalog.now())
+    and agent_memory.claim_holder_active(c.member_id)
+$$;
+
+-- The caller's active claims on visible memories in p_scope_ids (null means any), soonest end first, indefinite last.
+create function agent_memory.my_claims(p_scope_ids uuid[], p_limit int)
+returns table (
+  memory_id uuid, scope text, category text, tags text[], content text, description text, claimed_at timestamptz,
+  expires_at timestamptz, session_id uuid, session_label text
+)
+language sql stable security invoker
+set search_path = ''
+as $$
+  select c.memory_id, v.scope, v.category, v.tags, v.content, c.description, c.claimed_at, c.expires_at,
+         c.session_id, s.label
+  from agent_memory.memory_claims c
+  join agent_memory.memory_view v on v.id = c.memory_id
+  left join agent_memory.agent_sessions s on s.id = c.session_id
+  where c.member_id = agent_memory.current_member_id()
+    and (c.expires_at is null or c.expires_at > pg_catalog.now())
+    and (p_scope_ids is null or v.scope_id = any (p_scope_ids))
+  order by c.expires_at nulls last, c.memory_id
+  limit p_limit
+$$;
+
+revoke execute on function agent_memory.memory_claims_for(uuid[]) from public;
+revoke execute on function agent_memory.my_claims(uuid[], int) from public;
+grant execute on function agent_memory.memory_claims_for(uuid[]) to agent_memory_member;
+grant execute on function agent_memory.my_claims(uuid[], int) to agent_memory_member;
