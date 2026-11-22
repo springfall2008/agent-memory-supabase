@@ -68,10 +68,12 @@ decay re-sorts after SQL.
 
 **Links.** `memory_links(from_id, to_id, type)` holds typed one-way links between memories. A link is visible only to a
 member who can read both ends and while neither is soft-deleted (the select policy, like `thread_links`), so no error or
-count may hint at a link the caller can't see. Writes go through `relate_memories` / `unrelate_memories` (per-type write
-rules, a cap of 100 outgoing links per memory); `memory_neighbours` (breadth-first walk) and `memory_links_for` run as
-the caller. `PgMemoryStore.addLinks` attaches `links`, `moreLinks` and `superseded` to search, browse, `find_related`
-and `list_recent` results with one batched query per result set. A superseded memory is flagged, not demoted. Design:
+count may hint at a link the caller can't see (accepted exception: the 100-outgoing-link cap error, which only a writer
+of the memory's scope can trigger, because `relates-to` is stored from the end the caller can write). Writes go through
+`relate_memories` / `unrelate_memories` (per-type write rules, a cap of 100 outgoing links per memory);
+`memory_neighbours` (breadth-first walk) and `memory_links_for` run as the caller. `PgMemoryStore.addLinks` attaches
+`links`, `moreLinks` and `superseded` to search, browse, `find_related` and `list_recent` results with one batched query
+per result set. A superseded memory is flagged, not demoted. Design:
 `docs/superpowers/specs/2026-11-22-memory-links-design.md`.
 
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
