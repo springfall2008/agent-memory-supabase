@@ -69,9 +69,9 @@ Deno.test('edge function end-to-end over MCP', async () => {
     const ro = await issue(world.ro.id);
     const none = await issue(world.none.id);
 
-    await t('tools/list returns 22 tools', async () => {
+    await t('tools/list returns 25 tools', async () => {
       const c = await open(rw.token);
-      assertEquals((await c.listTools()).tools.length, 22);
+      assertEquals((await c.listTools()).tools.length, 25);
     });
 
     await t('store, search, update, find_related, delete as rw', async () => {
@@ -120,6 +120,55 @@ Deno.test('edge function end-to-end over MCP', async () => {
       await c.callTool({ name: 'delete', arguments: { id: stored.id } });
       const gone = await c.callTool({ name: 'update', arguments: { id: stored.id, tags: [] } });
       assertEquals(gone.isError, true);
+    });
+
+    await t('link two memories, follow the link, see it in search, remove it', async () => {
+      const c = await open(rw.token);
+      const store = async (content: string) =>
+        parse(
+          await c.callTool({
+            name: 'store',
+            arguments: { scope: world.alpha.name, content, category: 'learning', tags: ['e2e-links'] },
+          }),
+        );
+      const older = await store('okapi migration plan, first draft');
+      const newer = await store('okapi migration plan, revised after review');
+
+      const related = parse(
+        await c.callTool({
+          name: 'relate_memories',
+          arguments: { from_id: newer.id, to_id: older.id, type: 'supersedes' },
+        }),
+      );
+      assertEquals(related, { related: true });
+
+      const walked = parse(await c.callTool({ name: 'neighbours', arguments: { memory_id: newer.id } }));
+      assertEquals(walked.count, 1);
+      assertEquals(walked.truncated, false);
+      assertEquals(walked.results[0].memory.id, older.id);
+      assertEquals(walked.results[0].memory.superseded, true);
+      assertEquals(walked.results[0].path, [{ type: 'supersedes', direction: 'out', memoryId: older.id }]);
+
+      const found = parse(await c.callTool({ name: 'search', arguments: { query: 'okapi migration plan' } }));
+      const hit = found.results.find((r: { memory: { id: string } }) => r.memory.id === older.id);
+      assertEquals(hit.memory.superseded, true);
+      assertEquals(hit.memory.links, [{ type: 'supersedes', direction: 'in', memoryId: newer.id }]);
+
+      const removed = parse(
+        await c.callTool({
+          name: 'unrelate_memories',
+          arguments: { from_id: newer.id, to_id: older.id, type: 'supersedes' },
+        }),
+      );
+      assertEquals(removed, { unrelated: true });
+      const after = parse(await c.callTool({ name: 'neighbours', arguments: { memory_id: newer.id } }));
+      assertEquals(after.count, 0);
+
+      const denied = await c.callTool({
+        name: 'relate_memories',
+        arguments: { from_id: newer.id, to_id: older.id, type: 'nope' },
+      });
+      assertEquals(denied.isError, true);
     });
 
     await t('spoofing a member id changes nothing', async () => {
@@ -171,22 +220,22 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(parse(await c.callTool({ name: 'list_scopes', arguments: {} })), { count: 0, scopes: [] });
     });
 
-    await t('admin token sees 35 tools; non-admin and bot see the 22 non-admin tools', async () => {
+    await t('admin token sees 38 tools; non-admin and bot see the 25 non-admin tools', async () => {
       const [a] = await sql`
         insert into agent_memory.members (display_name, kind) values (${adminName}, 'human') returning id`;
       await setAdmin(sql, adminName, true);
       const admin = await issue(a.id);
       const names = async (tok: string) => (await (await open(tok)).listTools()).tools.map((x) => x.name);
       const adminTools = await names(admin.token);
-      assertEquals(adminTools.length, 35);
+      assertEquals(adminTools.length, 38);
       assertEquals(adminTools.filter((n) => n.startsWith('admin_')).length, 13);
       const base = await names(rw.token);
-      assertEquals(base.length, 22);
+      assertEquals(base.length, 25);
       assert(!base.some((n) => n.startsWith('admin_')));
       assertEquals(await names(none.token), base);
       const bot = await issue(world.bw.id);
       assertEquals(await names(bot.token), base);
-      assertEquals(adminTools.slice(0, 22), base);
+      assertEquals(adminTools.slice(0, 25), base);
     });
 
     await t('two clients on one token trade a question and answer', async () => {
@@ -280,7 +329,7 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(scopes.count, 1);
       assertEquals(scopes.scopes[0].scope, world.alpha.name);
       assertEquals(scopes.scopes[0].access, 'read');
-      assertEquals((await nc.listTools()).tools.length, 22);
+      assertEquals((await nc.listTools()).tools.length, 25);
 
       await ok('admin_deactivate_member', { name: newName });
       const r = await post({ authorization: `Bearer ${issued.token}` }, '', {

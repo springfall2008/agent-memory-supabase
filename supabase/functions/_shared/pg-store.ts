@@ -5,23 +5,33 @@ import { applyDecay, importanceMultiplier, isEvergreen, parseDecayHalfLife } fro
 import {
   checkBrowseLimit,
   checkContent,
+  checkDepth,
   checkLimit,
   checkOffset,
   DEFAULT_LIMIT,
+  LINKS_SHOWN_MAX,
+  NEIGHBOURS_DEFAULT_DEPTH,
+  NEIGHBOURS_MAX_RESULTS,
   OVER_FETCH_FACTOR,
   PRUNE_MAX_DORMANT_DAYS_DEFAULT,
   PRUNE_MIN_STRENGTH_DEFAULT,
   STORE_BATCH_MAX,
   StoreError,
 } from './limits.ts';
+import { LINK_TYPES } from './types.ts';
 import type {
   BrowseFilters,
   BrowsePage,
   Embedder,
+  LinkDirection,
+  LinkType,
   Memory,
   MemoryCategory,
   MemoryStats,
   MemoryStore,
+  Neighbour,
+  NeighbourOptions,
+  NeighboursResult,
   PruneOptions,
   PruneResult,
   ScopeInfo,
@@ -127,6 +137,39 @@ export class PgMemoryStore implements MemoryStore {
       const x = byId.get(r.memory.id);
       if (x?.created_session_label != null) r.memory.createdSession = x.created_session_label;
       if (x?.updated_session_label != null) r.memory.updatedSession = x.updated_session_label;
+    }
+  }
+
+  /**
+   * Adds each memory's visible links (at most LINKS_SHOWN_MAX, newest first), the count of the rest, and `superseded`
+   * when a visible `supersedes` link points at it. One query for the whole set, never one per memory; the database
+   * ranks, caps and counts, so a hub memory costs LINKS_SHOWN_MAX rows however many links it has. Memories with no
+   * visible links gain no key.
+   */
+  private async addLinks(tx: Tx, memories: Memory[]): Promise<void> {
+    if (memories.length === 0) return;
+    const ids = [...new Set(memories.map((m) => m.id))];
+    const rows = await tx<Row[]>`
+      select memory_id, type, direction, other_id, total, superseded
+      from agent_memory.memory_links_for(${ids}::uuid[], ${LINKS_SHOWN_MAX}::int)`;
+    if (rows.length === 0) return;
+    const byMemory = new Map<string, Row[]>();
+    for (const r of rows) {
+      const list = byMemory.get(r.memory_id) ?? [];
+      list.push(r);
+      byMemory.set(r.memory_id, list);
+    }
+    for (const m of memories) {
+      const mine = byMemory.get(m.id);
+      if (!mine) continue;
+      m.links = mine.map((r) => ({
+        type: r.type as LinkType,
+        direction: r.direction as LinkDirection,
+        memoryId: r.other_id as string,
+      }));
+      const total = Number(mine[0].total);
+      if (total > mine.length) m.moreLinks = total - mine.length;
+      if (mine[0].superseded === true) m.superseded = true;
     }
   }
 
@@ -367,6 +410,7 @@ export class PgMemoryStore implements MemoryStore {
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
+      await this.addLinks(tx, results.map((r) => r.memory));
       return results;
     });
   }
@@ -399,7 +443,9 @@ export class PgMemoryStore implements MemoryStore {
           and (${f.before ?? null}::timestamptz is null or created_at <= ${f.before ?? null}::timestamptz)
         order by created_at desc, id
         limit ${limit + 1} offset ${offset}`;
-      return { memories: rows.slice(0, limit).map(rowToMemory), hasMore: rows.length > limit };
+      const memories = rows.slice(0, limit).map(rowToMemory);
+      await this.addLinks(tx, memories);
+      return { memories, hasMore: rows.length > limit };
     });
   }
 
@@ -422,7 +468,56 @@ export class PgMemoryStore implements MemoryStore {
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);
       await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
+      await this.addLinks(tx, results.map((r) => r.memory));
       return results;
+    });
+  }
+
+  async relate(from: string, to: string, type: LinkType): Promise<void> {
+    if (!isUuid(from)) throw notFoundMemory(from);
+    if (!isUuid(to)) throw notFoundMemory(to);
+    await this.run(async (tx) => {
+      await tx`select agent_memory.relate_memories(${from}::uuid, ${to}::uuid, ${type}::text)`;
+    });
+  }
+
+  async unrelate(from: string, to: string, type: LinkType): Promise<boolean> {
+    if (!isUuid(from)) throw notFoundMemory(from);
+    if (!isUuid(to)) throw notFoundMemory(to);
+    return await this.run(async (tx) => {
+      const [r] = await tx<Row[]>`
+        select agent_memory.unrelate_memories(${from}::uuid, ${to}::uuid, ${type}::text) as removed`;
+      return r.removed === true;
+    });
+  }
+
+  /** Follows visible links breadth-first from one memory. Navigation, not relevance: it does not count as an access. */
+  async neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult> {
+    if (!isUuid(id)) throw notFoundMemory(id);
+    const depth = o.depth ?? NEIGHBOURS_DEFAULT_DEPTH;
+    checkDepth(depth);
+    const direction = o.direction ?? 'both';
+    if (!['out', 'in', 'both'].includes(direction)) throw new StoreError('direction must be out, in or both');
+    for (const t of o.types ?? []) {
+      if (!LINK_TYPES.includes(t)) throw new StoreError(`Invalid link type '${t}'`);
+    }
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, o.scopes);
+      const start = await tx<Row[]>`select id from agent_memory.memory_view where id = ${id}::uuid`;
+      if (start.length === 0) throw notFoundMemory(id);
+      // One statement, so the walk and the memories it names come from the same snapshot: a memory deleted or moved
+      // while the walk runs drops out of the join instead of leaving a hole in the result.
+      const rows = await tx<Row[]>`
+        select v.*, n.path as walk_path
+        from agent_memory.memory_neighbours(
+          ${id}::uuid, ${direction}::text, ${o.types?.length ? tx.array(o.types) : null}::text[], ${depth}::int,
+          ${scopeIds}::uuid[], ${NEIGHBOURS_MAX_RESULTS + 1}::int) with ordinality as n(id, depth, path, ord)
+        join agent_memory.memory_view v on v.id = n.id
+        order by n.ord`;
+      const page = rows.slice(0, NEIGHBOURS_MAX_RESULTS);
+      const found = page.map((r) => ({ memory: rowToMemory(r), path: r.walk_path as Neighbour['path'] }));
+      await this.addLinks(tx, found.map((n) => n.memory));
+      return { neighbours: found, truncated: rows.length > NEIGHBOURS_MAX_RESULTS };
     });
   }
 
@@ -437,7 +532,9 @@ export class PgMemoryStore implements MemoryStore {
       }::text)
         order by created_at desc, id
         limit ${limit}`;
-      return rows.map(rowToMemory);
+      const memories = rows.map(rowToMemory);
+      await this.addLinks(tx, memories);
+      return memories;
     });
   }
 

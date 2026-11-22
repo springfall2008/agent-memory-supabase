@@ -65,6 +65,19 @@ Store durable findings with the category that fits (`architecture`, `bug-fix`, `
 Store the *why*, not the diff. Never store secrets, tokens, credentials or anything from a `.env` file: the store is
 plaintext in a hosted database that others can read. Don't store what the repo already records, or session chatter.
 
+### Links
+
+A link connects two memories so that you, or another agent, can follow it instead of running a new search. Results show a
+memory's `links`, and `neighbours` follows them. Link when the relationship is worth knowing later:
+
+- `supersedes`: a newer memory replaces an older one you want to keep. This is the rarer case: if the old memory is just
+  wrong, update it instead of storing a second one.
+- `derived-from`: a conclusion and the evidence behind it.
+- `depends-on`: a prerequisite.
+- `relates-to`: anything else that belongs together.
+
+A memory flagged `superseded: true` has been replaced; follow its `supersedes` link to the newer one.
+
 ### Threads
 
 A memory holds what is settled. A thread holds the discussion that leads there. Use a thread to hand findings between

@@ -68,6 +68,8 @@ export interface Backup {
   }[];
   threadLinks?: { threadId: string; memoryId: string; linkedBy: string; linkedAt: string }[];
   subscriptions?: { sessionId: string; threadId: string; lastSeenSeq: number; subscribedAt: string }[];
+  /** Absent in files written before memory links. `createdBy` is a display name. */
+  memoryLinks?: { fromId: string; toId: string; type: string; createdBy: string; createdAt: string }[];
 }
 
 const USAGE = `Usage: deno run -A scripts/backup.ts <command> ...
@@ -81,7 +83,8 @@ const TS = (col: string) => `to_char(${col} at time zone 'utc', 'YYYY-MM-DD"T"HH
 
 /**
  * Read everything except token hashes. With `scope`, only that scope's memories, grants and threads (with their posts,
- * the links to memories in the backup, and subscriptions), the sessions those reference, and the members behind it all.
+ * the thread links to memories in the backup, and subscriptions), the memory-to-memory links whose two ends are both in
+ * the backup, the sessions those reference, and the members behind it all.
  */
 export function exportBackup(sql: Sql, scope?: string): Promise<Backup> {
   // One repeatable-read snapshot, so a backup taken while writers are active is point-in-time consistent.
@@ -144,6 +147,14 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     where l.thread_id = any(${threadIds}::uuid[]) and l.memory_id = any(${memoryIds}::uuid[])
     order by l.thread_id, l.memory_id`;
 
+  // Only links whose both ends are in this backup, so a scoped file never mentions a memory outside it.
+  const memoryLinks = await sql`
+    select l.from_id as "fromId", l.to_id as "toId", l.type, cb.display_name as "createdBy",
+           ${sql.unsafe(TS('l.created_at'))} as "createdAt"
+    from agent_memory.memory_links l join agent_memory.members cb on cb.id = l.created_by
+    where l.from_id = any(${memoryIds}::uuid[]) and l.to_id = any(${memoryIds}::uuid[])
+    order by l.from_id, l.to_id, l.type`;
+
   const subscriptions = await sql`
     select sub.session_id as "sessionId", sub.thread_id as "threadId", sub.last_seen_seq as "lastSeenSeq",
            ${sql.unsafe(TS('sub.subscribed_at'))} as "subscribedAt"
@@ -182,6 +193,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
   }
   for (const p of threadPosts) wanted.add(p.author);
   for (const l of threadLinks) wanted.add(l.linkedBy);
+  for (const l of memoryLinks) wanted.add(l.createdBy);
   const members = await sql`
     select id, display_name as "displayName", kind, email, auth_user_id as "authUserId",
            ${sql.unsafe(TS('created_at'))} as "createdAt", is_admin as "isAdmin",
@@ -203,6 +215,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     threadPosts: [...threadPosts] as unknown as NonNullable<Backup['threadPosts']>,
     threadLinks: [...threadLinks] as unknown as NonNullable<Backup['threadLinks']>,
     subscriptions: [...subscriptions] as unknown as NonNullable<Backup['subscriptions']>,
+    memoryLinks: [...memoryLinks] as unknown as NonNullable<Backup['memoryLinks']>,
   };
 }
 
@@ -290,6 +303,11 @@ export async function restoreBackup(sql: Sql, data: Backup): Promise<void> {
         insert into agent_memory.thread_links (thread_id, memory_id, linked_by, linked_at)
         values (${l.threadId}, ${l.memoryId}, ${memberId(l.linkedBy)}, (${l.linkedAt}::text)::timestamptz)`;
     }
+    for (const l of data.memoryLinks ?? []) {
+      await tx`
+        insert into agent_memory.memory_links (from_id, to_id, type, created_by, created_at)
+        values (${l.fromId}, ${l.toId}, ${l.type}, ${memberId(l.createdBy)}, (${l.createdAt}::text)::timestamptz)`;
+    }
     for (const x of data.subscriptions ?? []) {
       await tx`
         insert into agent_memory.thread_subscriptions (session_id, thread_id, last_seen_seq, subscribed_at)
@@ -329,14 +347,18 @@ async function main(): Promise<void> {
       }
       console.log(
         `Wrote ${out}: ${data.scopes.length} scopes, ${data.members.length} members, ` +
-          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads`,
+          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
+            data.memoryLinks?.length ?? 0
+          } memory links`,
       );
     } else {
       const data = JSON.parse(await Deno.readTextFile(p[0])) as Backup;
       await restoreBackup(sql, data);
       console.log(
         `Restored ${data.scopes.length} scopes, ${data.members.length} members, ` +
-          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads`,
+          `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
+            data.memoryLinks?.length ?? 0
+          } memory links`,
       );
     }
   } finally {

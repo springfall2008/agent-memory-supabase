@@ -319,6 +319,80 @@ Deno.test('scoped backup drops links to memories outside the scope', () =>
     assertEquals((await db`select count(*)::int as n from agent_memory.thread_links`)[0].n, 1);
   }));
 
+const linkRows = (db: DbSql) =>
+  db`select from_id, to_id, type, created_by, created_at::text from agent_memory.memory_links
+    order by from_id, to_id, type`;
+
+Deno.test('backup round-trips memory links', () =>
+  withEmptyDb(async (db) => {
+    const ids = await seedThreads(db);
+    const [ann] = await db`select id from agent_memory.members where display_name = 'th-ann'`;
+    const [bot] = await db`select id from agent_memory.members where display_name = 'th-bot'`;
+    await db`insert into agent_memory.memory_links (from_id, to_id, type, created_by, created_at) values
+      (${ids.mA}, ${ids.mB}, 'supersedes', ${ann.id}, '2026-05-01 00:00:01.123456+00'),
+      (${ids.mA}, ${ids.mB}, 'depends-on', ${ann.id}, '2026-05-01 00:00:02.234567+00'),
+      (${ids.mA}, ${ids.mB}, 'relates-to', ${bot.id}, '2026-05-01 00:00:03.345678+00'),
+      (${ids.mB}, ${ids.mA}, 'derived-from', ${bot.id}, '2026-05-01 00:00:04.456789+00')`;
+    const before = await linkRows(db);
+    assertEquals(before.length, 4);
+    const file = `${dir}/links.json`;
+    const r1 = await cli('backup', '--out', file);
+    assertEquals(r1.code, 0, r1.err);
+    assertStringIncludes(r1.out, '4 memory links');
+    const data = JSON.parse(await Deno.readTextFile(file));
+    assertEquals(data.memoryLinks.length, 4);
+    assertEquals(data.memoryLinks.map((l: { type: string }) => l.type).sort(), [
+      'depends-on',
+      'derived-from',
+      'relates-to',
+      'supersedes',
+    ]);
+
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    const r2 = await cli('restore-backup', file);
+    assertEquals(r2.code, 0, r2.err);
+    assertStringIncludes(r2.out, '4 memory links');
+    assertEquals(await linkRows(db), before);
+
+    // a file written before links existed still restores
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    delete data.memoryLinks;
+    await restoreBackup(db, data);
+    assertEquals((await db`select count(*)::int as n from agent_memory.memories`)[0].n, 2);
+    assertEquals((await db`select count(*)::int as n from agent_memory.memory_links`)[0].n, 0);
+  }));
+
+Deno.test('scoped backup drops memory links to memories outside the scope', () =>
+  withEmptyDb(async (db) => {
+    const ids = await seedThreads(db);
+    const [ann] = await db`select id from agent_memory.members where display_name = 'th-ann'`;
+    const [bot] = await db`select id from agent_memory.members where display_name = 'th-bot'`;
+    const [alpha] = await db`select id from agent_memory.scopes where name = 'th-alpha'`;
+    const [mA2] = await db`insert into agent_memory.memories
+      (scope_id, content, category, tags, created_by, updated_by, embedding)
+      values (${alpha.id}, 'second alpha memory', 'learning', ${db.array(['t'], 1009)}, ${ann.id}, ${ann.id},
+              ${vec(9)}::extensions.vector) returning id`;
+    // one link inside th-alpha (made by a member with no grant there), one across to th-beta
+    await db`insert into agent_memory.memory_links (from_id, to_id, type, created_by) values
+      (${ids.mA}, ${mA2.id}, 'relates-to', ${bot.id}),
+      (${ids.mA}, ${ids.mB}, 'depends-on', ${ann.id})`;
+    const file = `${dir}/links-scoped.json`;
+    const r = await cli('backup', '--scope', 'th-alpha', '--out', file);
+    assertEquals(r.code, 0, r.err);
+    const d = JSON.parse(await Deno.readTextFile(file));
+    assertEquals(d.memoryLinks.length, 1);
+    assertEquals(d.memoryLinks[0].type, 'relates-to');
+    assertEquals(d.memoryLinks[0].createdBy, 'th-bot');
+    assert(d.members.some((m: { displayName: string }) => m.displayName === 'th-bot'), 'the link author is included');
+
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    await restoreBackup(db, d);
+    assertEquals((await db`select count(*)::int as n from agent_memory.memory_links`)[0].n, 1);
+  }));
+
 Deno.test('remove the backup test directory', async () => {
   if (!keepDir) await Deno.remove(dir, { recursive: true });
 });

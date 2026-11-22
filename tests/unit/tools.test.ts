@@ -1,18 +1,27 @@
-import { assert, assertEquals, assertStringIncludes } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes, assertThrows } from '@std/assert';
 import { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import {
   handleFindRelated,
   handleListRecent,
+  handleNeighbours,
   handleRecall,
+  handleRelate,
   handleSearch,
   handleStats,
   handleStore,
   handleStoreBatch,
+  handleUnrelate,
   handleUpdate,
   registerTools,
 } from '../../supabase/functions/_shared/tools.ts';
 import { STORE_BATCH_MAX } from '../../supabase/functions/_shared/limits.ts';
-import type { Embedder, Memory, MemoryStore, SearchFilters } from '../../supabase/functions/_shared/types.ts';
+import type {
+  Embedder,
+  Memory,
+  MemoryStore,
+  Neighbour,
+  SearchFilters,
+} from '../../supabase/functions/_shared/types.ts';
 
 const mem = (id: string, scope = 's'): Memory => ({
   id,
@@ -30,7 +39,15 @@ const mem = (id: string, scope = 's'): Memory => ({
 type Calls = Record<string, any[][]>;
 
 function mockStore(
-  opts: { storeError?: Error; browsePage?: Memory[]; browseHasMore?: boolean } = {},
+  opts: {
+    storeError?: Error;
+    browsePage?: Memory[];
+    browseHasMore?: boolean;
+    relateError?: Error;
+    unrelated?: boolean;
+    neighbours?: Neighbour[];
+    truncated?: boolean;
+  } = {},
 ): { store: MemoryStore; calls: Calls } {
   const calls: Calls = {};
   const rec = (n: string, ...a: unknown[]) => (calls[n] ??= []).push(a);
@@ -55,6 +72,19 @@ function mockStore(
     browse: (f) => {
       rec('browse', f);
       return Promise.resolve({ memories: opts.browsePage ?? [], hasMore: opts.browseHasMore ?? false });
+    },
+    relate: (from, to, type) => {
+      rec('relate', from, to, type);
+      if (opts.relateError) return Promise.reject(opts.relateError);
+      return Promise.resolve();
+    },
+    unrelate: (from, to, type) => {
+      rec('unrelate', from, to, type);
+      return Promise.resolve(opts.unrelated ?? true);
+    },
+    neighbours: (id, o) => {
+      rec('neighbours', id, o);
+      return Promise.resolve({ neighbours: opts.neighbours ?? [], truncated: opts.truncated ?? false });
     },
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
@@ -271,7 +301,7 @@ Deno.test('handleUpdate with only tags passes only tags', async () => {
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
 });
 
-Deno.test('registerTools registers exactly 11 tools', () => {
+Deno.test('registerTools registers exactly 14 tools', () => {
   const { store } = mockStore();
   const { embedder } = mockEmbedder();
   const server = new McpServer({ name: 'test', version: '0.0.0' });
@@ -284,12 +314,15 @@ Deno.test('registerTools registers exactly 11 tools', () => {
       'find_related',
       'list_recent',
       'list_scopes',
+      'neighbours',
       'prune',
       'recall',
+      'relate_memories',
       'search',
       'stats',
       'store',
       'store_batch',
+      'unrelate_memories',
       'update',
     ],
   );
@@ -356,4 +389,78 @@ Deno.test('store, store_batch and update pass the session through only when give
   await handleUpdate(store)({ id: 'i', tags: ['x'], session: 'u' });
   assertEquals(calls.update[0][2], { session: 'u' });
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
+});
+
+Deno.test('handleRelate passes ids and type to the store and returns related: true', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleRelate(store)({ from_id: 'a', to_id: 'b', type: 'supersedes' });
+  assertEquals(calls.relate[0], ['a', 'b', 'supersedes']);
+  assertEquals(JSON.parse(r.content[0].text), { related: true });
+});
+
+Deno.test('handleRelate with a store error is an isError result prefixed Relate failed', async () => {
+  const { store } = mockStore({ relateError: new Error('Memory a not found') });
+  const r = await handleRelate(store)({ from_id: 'a', to_id: 'b', type: 'relates-to' });
+  assertEquals((r as { isError?: boolean }).isError, true);
+  assertEquals(r.content[0].text, 'Relate failed: Memory a not found');
+});
+
+Deno.test("handleUnrelate returns the store's boolean", async () => {
+  const { store, calls } = mockStore({ unrelated: false });
+  const r = await handleUnrelate(store)({ from_id: 'a', to_id: 'b', type: 'depends-on' });
+  assertEquals(calls.unrelate[0], ['a', 'b', 'depends-on']);
+  assertEquals(JSON.parse(r.content[0].text), { unrelated: false });
+});
+
+Deno.test('handleNeighbours passes its options through and an empty scopes array becomes undefined', async () => {
+  const { store, calls } = mockStore();
+  await handleNeighbours(store)({
+    memory_id: 'm',
+    direction: 'out',
+    types: ['supersedes'],
+    depth: 2,
+    scopes: ['s'],
+  });
+  assertEquals(calls.neighbours[0], ['m', { direction: 'out', types: ['supersedes'], depth: 2, scopes: ['s'] }]);
+  await handleNeighbours(store)({ memory_id: 'm', scopes: [] });
+  assertEquals(calls.neighbours[1][1].scopes, undefined);
+});
+
+Deno.test('handleNeighbours returns count, truncated and results', async () => {
+  const path = [{ type: 'depends-on' as const, direction: 'out' as const, memoryId: 'm2' }];
+  const { store } = mockStore({ neighbours: [{ memory: mem('m2'), path }], truncated: true });
+  const body = JSON.parse((await handleNeighbours(store)({ memory_id: 'm1' })).content[0].text);
+  assertEquals(body.count, 1);
+  assertEquals(body.truncated, true);
+  assertEquals(body.results[0].path, path);
+  assertEquals(body.results[0].memory.id, 'm2');
+});
+
+Deno.test('the registered link tools reject an unknown link type', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered =
+    (server as unknown as { _registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }> })
+      ._registeredTools;
+  for (const tool of ['relate_memories', 'unrelate_memories']) {
+    assertThrows(() => registered[tool].inputSchema.parse({ from_id: 'a', to_id: 'b', type: 'nope' }));
+    registered[tool].inputSchema.parse({ from_id: 'a', to_id: 'b', type: 'supersedes' });
+  }
+});
+
+Deno.test('search and recall descriptions say that results carry links and a superseded flag', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as { _registeredTools: Record<string, { description?: string }> })
+    ._registeredTools;
+  for (const tool of ['search', 'recall']) {
+    const d = registered[tool].description ?? '';
+    assertStringIncludes(d, 'links', `${tool} mentions links`);
+    assertStringIncludes(d, 'superseded', `${tool} mentions superseded`);
+    assertStringIncludes(d, 'neighbours', `${tool} points at neighbours`);
+  }
 });

@@ -4,6 +4,9 @@ import type { PgThreadStore } from './thread-store.ts';
 import { checkLimit, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
 import {
   type Embedder,
+  LINK_TYPES,
+  type LinkDirection,
+  type LinkType,
   MEMORY_CATEGORIES,
   type MemoryCategory,
   type MemoryStore,
@@ -226,6 +229,49 @@ export function handleFindRelated(store: MemoryStore) {
   };
 }
 
+export function handleRelate(store: MemoryStore) {
+  return async (args: { from_id: string; to_id: string; type: LinkType }) => {
+    try {
+      await store.relate(args.from_id, args.to_id, args.type);
+      return success({ related: true });
+    } catch (err) {
+      return error('Relate failed', err);
+    }
+  };
+}
+
+export function handleUnrelate(store: MemoryStore) {
+  return async (args: { from_id: string; to_id: string; type: LinkType }) => {
+    try {
+      return success({ unrelated: await store.unrelate(args.from_id, args.to_id, args.type) });
+    } catch (err) {
+      return error('Unrelate failed', err);
+    }
+  };
+}
+
+export function handleNeighbours(store: MemoryStore) {
+  return async (args: {
+    memory_id: string;
+    direction?: LinkDirection;
+    types?: LinkType[];
+    depth?: number;
+    scopes?: string[];
+  }) => {
+    try {
+      const r = await store.neighbours(args.memory_id, {
+        direction: args.direction,
+        types: args.types,
+        depth: args.depth,
+        scopes: scopesOrUndefined(args.scopes),
+      });
+      return success({ count: r.neighbours.length, truncated: r.truncated, results: r.neighbours });
+    } catch (err) {
+      return error('Neighbours failed', err);
+    }
+  };
+}
+
 export function handleListRecent(store: MemoryStore) {
   return async (args: { limit?: number; category?: MemoryCategory; scopes?: string[] }) => {
     try {
@@ -341,6 +387,7 @@ export function registerTools(
   server.registerTool('search', {
     description:
       'Search memories by meaning and/or keywords. Default mode is hybrid (BM25 + vector). Returns ranked results with relevance scores. ' +
+      'Each memory shows its `links` to other memories and `superseded: true` when a newer memory replaces it; call `neighbours` to follow links. ' +
       'Omit the query to browse instead: every memory matching the filters, newest first, with no ranking, paged by limit and offset ' +
       '(has_more says whether another page follows). Browsing does not count as access, so use it to sweep for cleanup. ' +
       'Offsets shift if you delete or add memories while paging; after deleting, re-fetch from the same offset or page from the end.',
@@ -359,7 +406,7 @@ export function registerTools(
 
   server.registerTool('recall', {
     description:
-      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently.',
+      'Multi-topic contextual recall — the morning coffee tool. Searches multiple topics and includes recent memories. Use at session start to restore context efficiently. Returned memories show their `links` to other memories and `superseded: true` when a newer memory replaces them; call `neighbours` to follow links.',
     inputSchema: z.object({
       topics: z.array(z.string()).describe('List of topics to search for'),
       include_recent: z.number().optional().describe('Number of recent memories to include (default 5)'),
@@ -377,6 +424,49 @@ export function registerTools(
       scopes: scopesSchema,
     }),
   }, handleFindRelated(store));
+
+  const linkTypeSchema = z.enum(LINK_TYPES).describe(
+    'relates-to: loosely associated (no direction); supersedes: from replaces to, so to is out of date; ' +
+      'derived-from: from was concluded from to; depends-on: from only holds, or can only be done, if to does',
+  );
+  const linkRules =
+    'You need read access to both memories. supersedes needs write access to both scopes; derived-from and ' +
+    "depends-on need write access to the from memory's scope; relates-to needs write access to either. A memory " +
+    'can have at most 100 outgoing links.';
+
+  server.registerTool('relate_memories', {
+    description:
+      `Link two memories so an agent can find one from the other without a text search. Links point from one memory to another and show up in search, recall and list results. Use supersedes when a newer memory replaces an older one you want to keep, derived-from for a conclusion and the evidence behind it, depends-on for a prerequisite. ${linkRules}`,
+    inputSchema: z.object({
+      from_id: z.string().describe('ID of the memory the link starts at'),
+      to_id: z.string().describe('ID of the memory the link points to'),
+      type: linkTypeSchema,
+    }),
+  }, handleRelate(store));
+
+  server.registerTool('unrelate_memories', {
+    description:
+      "Remove a link between two memories. You need read access to both and write access to either one's scope. For relates-to the order of the two ids does not matter. Returns whether a link was removed.",
+    inputSchema: z.object({
+      from_id: z.string().describe('ID of the memory the link starts at'),
+      to_id: z.string().describe('ID of the memory the link points to'),
+      type: linkTypeSchema,
+    }),
+  }, handleUnrelate(store));
+
+  server.registerTool('neighbours', {
+    description:
+      'Follow links from a memory to find connected memories without a text search. Returns each memory reached once, with the path of links that led to it, nearest first, at most 100 (truncated says when more exist). Does not count as an access.',
+    inputSchema: z.object({
+      memory_id: z.string().describe('ID of the memory to start from'),
+      direction: z.enum(['out', 'in', 'both']).optional().describe(
+        'out: links it points to; in: links pointing at it; both (default). relates-to matches every direction',
+      ),
+      types: z.array(z.enum(LINK_TYPES)).optional().describe('Only follow these link types (default all)'),
+      depth: z.number().optional().describe('How many links to follow, 1 to 3 (default 1)'),
+      scopes: scopesSchema,
+    }),
+  }, handleNeighbours(store));
 
   server.registerTool('list_recent', {
     description:
