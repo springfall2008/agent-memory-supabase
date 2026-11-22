@@ -1,11 +1,14 @@
 import { assert, assertEquals, assertStringIncludes, assertThrows } from '@std/assert';
 import { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import {
+  handleClaim,
   handleFindRelated,
   handleListRecent,
+  handleMyClaims,
   handleNeighbours,
   handleRecall,
   handleRelate,
+  handleRelease,
   handleSearch,
   handleStats,
   handleStore,
@@ -19,6 +22,7 @@ import type {
   Embedder,
   Memory,
   MemoryStore,
+  MyClaim,
   Neighbour,
   SearchFilters,
 } from '../../supabase/functions/_shared/types.ts';
@@ -47,6 +51,9 @@ function mockStore(
     unrelated?: boolean;
     neighbours?: Neighbour[];
     truncated?: boolean;
+    claimError?: Error;
+    released?: boolean;
+    myClaims?: MyClaim[];
   } = {},
 ): { store: MemoryStore; calls: Calls } {
   const calls: Calls = {};
@@ -86,9 +93,19 @@ function mockStore(
       rec('neighbours', id, o);
       return Promise.resolve({ neighbours: opts.neighbours ?? [], truncated: opts.truncated ?? false });
     },
-    claim: () => Promise.resolve({ claimed: true as const, until: null }),
-    release: () => Promise.resolve(false),
-    myClaims: () => Promise.resolve([]),
+    claim: (id, description, o, s) => {
+      rec('claim', id, description, o, s);
+      if (opts.claimError) return Promise.reject(opts.claimError);
+      return Promise.resolve({ claimed: true as const, until: '2026-01-01T01:00:00.000Z' });
+    },
+    release: (id, force) => {
+      rec('release', id, force);
+      return Promise.resolve(opts.released ?? true);
+    },
+    myClaims: (scopes) => {
+      rec('myClaims', scopes);
+      return Promise.resolve(opts.myClaims ?? []);
+    },
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
       return Promise.resolve([]);
@@ -304,7 +321,7 @@ Deno.test('handleUpdate with only tags passes only tags', async () => {
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
 });
 
-Deno.test('registerTools registers exactly 14 tools', () => {
+Deno.test('registerTools registers exactly 17 tools', () => {
   const { store } = mockStore();
   const { embedder } = mockEmbedder();
   const server = new McpServer({ name: 'test', version: '0.0.0' });
@@ -313,14 +330,17 @@ Deno.test('registerTools registers exactly 14 tools', () => {
   assertEquals(
     Object.keys(registered).sort(),
     [
+      'claim_memory',
       'delete',
       'find_related',
       'list_recent',
       'list_scopes',
+      'my_claims',
       'neighbours',
       'prune',
       'recall',
       'relate_memories',
+      'release_claim',
       'search',
       'stats',
       'store',
@@ -510,4 +530,64 @@ Deno.test('the registered neighbours tool accepts detail short or full and rejec
   registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'short' });
   registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'full' });
   assertThrows(() => registered.neighbours.inputSchema.parse({ memory_id: 'a', detail: 'tiny' }));
+});
+
+Deno.test('handleClaim passes the options and the session through and returns the result', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleClaim(store)({
+    memory_id: 'm',
+    description: 'fixing it',
+    minutes: 30,
+    force: true,
+    session_label: 's-a',
+  });
+  const [id, description, o, s] = calls.claim[0];
+  assertEquals([id, description], ['m', 'fixing it']);
+  assertEquals([o.minutes, o.indefinite, o.force], [30, undefined, true]);
+  assertEquals(s.sessionLabel, 's-a');
+  assertEquals(JSON.parse(r.content[0].text), { claimed: true, until: '2026-01-01T01:00:00.000Z' });
+});
+
+Deno.test('handleClaim with a store error is an isError result prefixed Claim failed', async () => {
+  const { store } = mockStore({ claimError: new Error('Memory m is claimed by w until 2026-01-01T00:00:00Z: busy') });
+  const r = await handleClaim(store)({ memory_id: 'm', description: 'me too' });
+  assertEquals((r as { isError?: boolean }).isError, true);
+  assertEquals(r.content[0].text, 'Claim failed: Memory m is claimed by w until 2026-01-01T00:00:00Z: busy');
+});
+
+Deno.test('handleRelease passes force and returns released', async () => {
+  const { store, calls } = mockStore({ released: false });
+  const r = await handleRelease(store)({ memory_id: 'm', force: true });
+  assertEquals(calls.release[0], ['m', true]);
+  assertEquals(JSON.parse(r.content[0].text), { released: false });
+});
+
+Deno.test('handleMyClaims returns count and claims, and an empty scopes array means all', async () => {
+  const claim: MyClaim = {
+    memory: { id: 'm', scope: 's', category: 'other', tags: [], snippet: 'c' },
+    description: 'why',
+    claimedAt: '2026-01-01T00:00:00.000Z',
+    until: null,
+  };
+  const { store, calls } = mockStore({ myClaims: [claim] });
+  const body = JSON.parse((await handleMyClaims(store)({ scopes: [] })).content[0].text);
+  assertEquals(calls.myClaims[0][0], undefined);
+  assertEquals(body, { count: 1, claims: [claim] });
+});
+
+Deno.test('the claim tools validate their arguments and describe the rules', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, { description?: string; inputSchema: { parse: (v: unknown) => unknown } }>;
+  })._registeredTools;
+  assertThrows(() => registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', force: 'yes' }));
+  registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', indefinite: true, session_label: 's' });
+  registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true });
+  registered.my_claims.inputSchema.parse({ scopes: ['s'] });
+  const d = registered.claim_memory.description ?? '';
+  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force']) assertStringIncludes(d, phrase);
+  for (const tool of ['search', 'recall']) assertStringIncludes(registered[tool].description ?? '', 'claim');
 });
