@@ -1,7 +1,7 @@
 # Memory links — design
 
 Date: 2026-11-22
-Status: draft (builder check done; awaiting the maintainer's approval of the whole document)
+Status: implemented (local build and tests; not yet deployed)
 Builds on: [the hosted memory design](2026-11-07-supabase-agent-memory-design.md) and
 [discussion threads](2026-11-07-threads-design.md)
 

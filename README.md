@@ -46,10 +46,11 @@ It is not a knowledge graph, and it is not a personal assistant's memory. For on
 
 ## Tools
 
-The server exposes 22 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
+The server exposes 25 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
 thread tools (see [Threads and sessions](#threads-and-sessions)). The memory tools are `list_scopes`, `store`, `store_batch`, `search`, `recall`, `find_related`,
-`list_recent`, `update`, `delete`, `stats` and `prune`. They match the original server, plus a `scope` argument on the
-write tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
+`list_recent`, `update`, `delete`, `stats` and `prune`, plus the three link tools `relate_memories`, `unrelate_memories`
+and `neighbours` (see [Memory links](#memory-links)). They match the original server, plus a `scope` argument on the
+write tools, and the link tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
 Its `tags` filter keeps memories with at least one of the tags given; `tags_all` keeps only those with every one, so a
 query such as "open work in this repo" (`tags_all: ["repo:<name>", "status:open"]`) needs no client-side filtering.
 The two can be combined.
@@ -57,6 +58,28 @@ Leave out `query` and `search` browses instead of ranking: it lists every memory
 and pages with `limit` (up to 400) and `offset`, returning `has_more`. Browsing does not count as an access, so it suits
 a cleanup sweep. Offsets shift if memories are added or deleted while paging.
 Delete and prune are soft; rows are purged after 30 days.
+
+## Memory links
+
+Search finds memories by their words. A **link** is an explicit, typed, one-way relationship between two memories, so an
+agent holding one memory can find the ones connected to it without another query. There are four types:
+
+| Type | Meaning |
+|------|---------|
+| `supersedes` | `from` replaces `to`; `to` is out of date |
+| `derived-from` | `from` was concluded from `to` (a decision and its evidence) |
+| `depends-on` | `from` only holds, or can only be done, if `to` does |
+| `relates-to` | loosely associated; it has no direction, and the pair is stored once |
+
+`relate_memories` and `unrelate_memories` create and remove links, and `neighbours` follows them (1 to 3 hops, by
+direction and type, up to 100 memories, each with the path that reached it). It does not count as an access. Search,
+`recall`, `find_related` and `list_recent` results show each memory's links (up to 10, plus a `moreLinks` count), and a
+memory that a newer one `supersedes` is flagged `superseded: true`; it is flagged, not ranked lower.
+
+You need read access to both memories. `supersedes` needs write access to both scopes; `derived-from` and `depends-on`
+need write access to the `from` memory's scope; `relates-to` needs write access to either. Removing a link needs write
+access to either end's scope. A link is visible only to someone who can read both ends, so it never reveals a memory you
+cannot read, and the two memories may be in different scopes. A memory has at most 100 outgoing links.
 
 ## Threads and sessions
 
