@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from '@std/assert';
+import { assert, assertEquals, assertRejects } from '@std/assert';
 import { connect } from '../../supabase/functions/_shared/db.ts';
 import { PgMemoryStore } from '../../supabase/functions/_shared/pg-store.ts';
 import { adminSql, LOCAL_DB_URL, makeWorld, type World } from '../helpers/fixtures.ts';
@@ -246,4 +246,24 @@ Deno.test('soft-deleting the other end drops the link from results', () =>
     assertEquals(pick(await s.listRecent(10), a.id).links?.length, 1);
     await s.delete(b.id);
     assertEquals('links' in pick(await s.listRecent(10), a.id), false);
+  }));
+
+Deno.test('neighbours stays fast on a densely linked graph', () =>
+  withWorld(async (w, admin, mk) => {
+    const [s] = mk(w.rw.id);
+    // 100 memories, every pair linked once (4950 links): a path-enumerating walk would build about a million rows
+    await admin`insert into agent_memory.memories (scope_id, content, category, created_by, updated_by, embedding)
+      select ${w.alpha.id}, 'dense ' || i, 'other', ${w.rw.id}, ${w.rw.id},
+             array_fill(0.1::real, array[384])::extensions.vector from generate_series(1, 100) i`;
+    await admin`insert into agent_memory.memory_links (from_id, to_id, type, created_by)
+      select a.id, b.id, 'depends-on', ${w.rw.id} from agent_memory.memories a
+      join agent_memory.memories b on a.id < b.id and b.scope_id = ${w.alpha.id}
+      where a.scope_id = ${w.alpha.id}`;
+    const [{ id }] = await admin`select id from agent_memory.memories where scope_id = ${w.alpha.id} limit 1`;
+    const started = performance.now();
+    const r = await s.neighbours(id, { depth: 3 });
+    const ms = performance.now() - started;
+    assertEquals(r.neighbours.length, 99);
+    assertEquals(r.truncated, false);
+    assert(ms < 1500, `neighbours took ${Math.round(ms)} ms`);
   }));

@@ -152,43 +152,68 @@ grant execute on function agent_memory.unrelate_memories(uuid, uuid, text) to ag
 -- least(p_depth, 3) hops and only through memories in p_scope_ids (null means any); the start memory is always
 -- allowed and never returned. Each memory comes back once, at its shallowest depth, with the path of steps that reached
 -- it. Rows are ordered by depth, then the reaching link's created_at (newest first), then id, at most p_limit.
+-- The walk expands one level at a time from the memories found in the previous level, never from every path, so the
+-- work is bounded by the links of at most p_limit memories per level however densely the graph is connected.
 create function agent_memory.memory_neighbours(
   p_id uuid, p_direction text, p_types text[], p_depth int, p_scope_ids uuid[], p_limit int
 ) returns table (id uuid, depth int, path jsonb)
-language sql stable security invoker
+language plpgsql stable security invoker
 set search_path = ''
 as $$
-  with recursive walk as (
-    select p_id as id, 0 as depth, '[]'::jsonb as path, array[p_id] as seen, null::timestamptz as via_at
-    union all
-    select e.other, w.depth + 1,
-           w.path || pg_catalog.jsonb_build_array(
-             pg_catalog.jsonb_build_object('type', e.type, 'direction', e.dir, 'memoryId', e.other)),
-           w.seen || e.other, e.created_at
-    from walk w
-    cross join lateral (
-      select l.created_at, l.type,
-             case when l.type = 'relates-to' then 'both' when l.from_id = w.id then 'out' else 'in' end as dir,
-             case when l.from_id = w.id then l.to_id else l.from_id end as other
-      from agent_memory.memory_links l
-      where (l.from_id = w.id or l.to_id = w.id)
-        and (p_types is null or l.type = any (p_types))
-        and (p_direction = 'both' or l.type = 'relates-to'
-             or (p_direction = 'out' and l.from_id = w.id) or (p_direction = 'in' and l.to_id = w.id))
-    ) e
-    join agent_memory.memories m on m.id = e.other
-    where w.depth < least(p_depth, 3)
-      and not (e.other = any (w.seen))
-      and (p_scope_ids is null or m.scope_id = any (p_scope_ids))
-  ),
-  shallowest as (
-    select distinct on (walk.id) walk.id, walk.depth, walk.path, walk.via_at
-    from walk where walk.depth > 0
-    order by walk.id, walk.depth, walk.via_at desc
-  )
-  select s.id, s.depth, s.path from shallowest s
-  order by s.depth, s.via_at desc, s.id
-  limit p_limit
+#variable_conflict use_column
+declare
+  v_visited uuid[] := array[p_id];
+  v_ids uuid[] := array[p_id];
+  v_paths jsonb[] := array['[]'::jsonb];
+  v_next_ids uuid[];
+  v_next_paths jsonb[];
+  v_level int := 0;
+  v_left int := p_limit;
+  r record;
+begin
+  while v_level < least(p_depth, 3) and v_left > 0 and pg_catalog.cardinality(v_ids) > 0 loop
+    v_level := v_level + 1;
+    v_next_ids := '{}'::uuid[];
+    v_next_paths := '{}'::jsonb[];
+    for r in
+      select s.other, s.step_path, s.via_at
+      from (
+        select distinct on (e.other) e.other,
+               f.fpath || pg_catalog.jsonb_build_array(
+                 pg_catalog.jsonb_build_object('type', e.type, 'direction', e.dir, 'memoryId', e.other)) as step_path,
+               e.created_at as via_at
+        from rows from (pg_catalog.unnest(v_ids), pg_catalog.unnest(v_paths)) as f(fid, fpath)
+        cross join lateral (
+          select l.created_at, l.type,
+                 case when l.type = 'relates-to' then 'both' when l.from_id = f.fid then 'out' else 'in' end as dir,
+                 case when l.from_id = f.fid then l.to_id else l.from_id end as other
+          from agent_memory.memory_links l
+          where (l.from_id = f.fid or l.to_id = f.fid)
+            and (p_types is null or l.type = any (p_types))
+            and (p_direction = 'both' or l.type = 'relates-to'
+                 or (p_direction = 'out' and l.from_id = f.fid) or (p_direction = 'in' and l.to_id = f.fid))
+        ) e
+        join agent_memory.memories m on m.id = e.other
+        where not (e.other = any (v_visited))
+          and (p_scope_ids is null or m.scope_id = any (p_scope_ids))
+        order by e.other, e.created_at desc, f.fid
+      ) s
+      order by s.via_at desc, s.other
+      limit v_left
+    loop
+      id := r.other;
+      depth := v_level;
+      path := r.step_path;
+      return next;
+      v_next_ids := v_next_ids || r.other;
+      v_next_paths := v_next_paths || r.step_path;
+    end loop;
+    v_visited := v_visited || v_next_ids;
+    v_left := v_left - pg_catalog.cardinality(v_next_ids);
+    v_ids := v_next_ids;
+    v_paths := v_next_paths;
+  end loop;
+end
 $$;
 
 -- Every visible link end for each id in p_ids, one row per end. direction is 'out' where the id is from_id, 'in' where it
