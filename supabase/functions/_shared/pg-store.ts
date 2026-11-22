@@ -4,17 +4,23 @@ import { isUuid } from './thread-store.ts';
 import { applyDecay, importanceMultiplier, isEvergreen, parseDecayHalfLife } from './decay.ts';
 import {
   checkBrowseLimit,
+  checkClaimMinutes,
   checkContent,
   checkDepth,
   checkLimit,
   checkOffset,
+  CLAIM_DEFAULT_MINUTES,
+  CLAIM_DESCRIPTION_MAX,
+  CLAIM_SNIPPET_CHARS,
   DEFAULT_LIMIT,
   LINKS_SHOWN_MAX,
+  MY_CLAIMS_MAX,
   NEIGHBOURS_DEFAULT_DEPTH,
   NEIGHBOURS_MAX_RESULTS,
   OVER_FETCH_FACTOR,
   PRUNE_MAX_DORMANT_DAYS_DEFAULT,
   PRUNE_MIN_STRENGTH_DEFAULT,
+  snippet,
   STORE_BATCH_MAX,
   StoreError,
 } from './limits.ts';
@@ -22,6 +28,8 @@ import { LINK_TYPES } from './types.ts';
 import type {
   BrowseFilters,
   BrowsePage,
+  ClaimOptions,
+  ClaimResult,
   Embedder,
   LinkDirection,
   LinkType,
@@ -29,6 +37,7 @@ import type {
   MemoryCategory,
   MemoryStats,
   MemoryStore,
+  MyClaim,
   Neighbour,
   NeighbourOptions,
   NeighboursResult,
@@ -117,11 +126,12 @@ export class PgMemoryStore implements MemoryStore {
   }
 
   /** Resolves the named session (never creating one) inside the write transaction; null when none was named. */
-  private async resolveSession(tx: Tx, s?: SessionRef): Promise<string | null> {
+  private async resolveSession(tx: Tx, s?: SessionRef, create = false): Promise<string | null> {
     if (!s || (s.session === undefined && s.sessionLabel === undefined)) return null;
     if (s.session !== undefined && !isUuid(s.session)) throw new StoreError('Session not found');
     const rows = await tx<Row[]>`
-      select id from agent_memory.resolve_session(${s.session ?? null}::uuid, ${s.sessionLabel ?? null}::text, false)`;
+      select id from agent_memory.resolve_session(
+        ${s.session ?? null}::uuid, ${s.sessionLabel ?? null}::text, ${create}::boolean)`;
     return rows[0]?.id ?? null;
   }
 
@@ -518,6 +528,69 @@ export class PgMemoryStore implements MemoryStore {
       const found = page.map((r) => ({ memory: rowToMemory(r), path: r.walk_path as Neighbour['path'] }));
       await this.addLinks(tx, found.map((n) => n.memory));
       return { neighbours: found, truncated: rows.length > NEIGHBOURS_MAX_RESULTS };
+    });
+  }
+
+  /** Claim a memory, renewing the caller's own claim; see the SQL function claim_memory for the rules. */
+  async claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult> {
+    if (!isUuid(id)) throw notFoundMemory(id);
+    const desc = description.trim();
+    if (desc.length < 1 || desc.length > CLAIM_DESCRIPTION_MAX) {
+      throw new StoreError(`Description must be 1-${CLAIM_DESCRIPTION_MAX} characters`);
+    }
+    if (o.indefinite && o.minutes !== undefined) throw new StoreError('Pass minutes or indefinite, not both');
+    const minutes = o.indefinite ? null : o.minutes ?? CLAIM_DEFAULT_MINUTES;
+    if (minutes !== null) checkClaimMinutes(minutes);
+    return await this.run(async (tx) => {
+      const sessionId = await this.resolveSession(tx, s, true);
+      const [r] = await tx<Row[]>`
+        select * from agent_memory.claim_memory(${id}::uuid, ${desc}::text, ${minutes}::int,
+          ${o.indefinite === true}::boolean, ${o.force === true}::boolean, ${sessionId}::uuid)`;
+      const result: ClaimResult = { claimed: true, until: r.expires_at ? iso(r.expires_at) : null };
+      if (r.overridden_by != null) {
+        result.overridden = {
+          by: r.overridden_by,
+          until: r.overridden_until ? iso(r.overridden_until) : null,
+          description: r.overridden_description,
+        };
+      }
+      if (r.previous_session_id != null) {
+        result.previousSession = { id: r.previous_session_id, label: r.previous_session_label ?? null };
+      }
+      return result;
+    });
+  }
+
+  async release(id: string, force = false): Promise<boolean> {
+    if (!isUuid(id)) throw notFoundMemory(id);
+    return await this.run(async (tx) => {
+      const [r] = await tx<Row[]>`select agent_memory.release_claim(${id}::uuid, ${force}::boolean) as released`;
+      return r.released === true;
+    });
+  }
+
+  /** The caller's active claims, soonest end first and indefinite last, each with a snippet of its memory. */
+  async myClaims(scopes?: string[]): Promise<MyClaim[]> {
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, scopes);
+      const rows = await tx<Row[]>`
+        select * from agent_memory.my_claims(${scopeIds}::uuid[], ${MY_CLAIMS_MAX}::int)`;
+      return rows.map((r) => {
+        const c: MyClaim = {
+          memory: {
+            id: r.memory_id,
+            scope: r.scope,
+            category: r.category as MemoryCategory,
+            tags: r.tags,
+            snippet: snippet(r.content, CLAIM_SNIPPET_CHARS),
+          },
+          description: r.description,
+          claimedAt: iso(r.claimed_at),
+          until: r.expires_at ? iso(r.expires_at) : null,
+        };
+        if (r.session_id != null) c.session = { id: r.session_id, label: r.session_label ?? null };
+        return c;
+      });
     });
   }
 

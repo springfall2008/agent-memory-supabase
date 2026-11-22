@@ -86,6 +86,9 @@ function mockStore(
       rec('neighbours', id, o);
       return Promise.resolve({ neighbours: opts.neighbours ?? [], truncated: opts.truncated ?? false });
     },
+    claim: () => Promise.resolve({ claimed: true as const, until: null }),
+    release: () => Promise.resolve(false),
+    myClaims: () => Promise.resolve([]),
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
       return Promise.resolve([]);

@@ -1,7 +1,14 @@
 import { z } from 'npm:zod@4.6.7';
 import type { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import type { PgThreadStore } from './thread-store.ts';
-import { checkLimit, NEIGHBOUR_SNIPPET_CHARS, RECALL_EMBED_TOPICS_MAX, STORE_BATCH_MAX, StoreError } from './limits.ts';
+import {
+  checkLimit,
+  NEIGHBOUR_SNIPPET_CHARS,
+  RECALL_EMBED_TOPICS_MAX,
+  snippet,
+  STORE_BATCH_MAX,
+  StoreError,
+} from './limits.ts';
 import {
   type Embedder,
   LINK_TYPES,
@@ -270,10 +277,7 @@ export function handleNeighbours(store: MemoryStore) {
       const results = args.detail === 'short'
         ? r.neighbours.map(({ memory, path }) => {
           const { content, ...rest } = memory;
-          const snippet = content.length > NEIGHBOUR_SNIPPET_CHARS
-            ? content.slice(0, NEIGHBOUR_SNIPPET_CHARS) + '…'
-            : content;
-          return { memory: { ...rest, snippet }, path };
+          return { memory: { ...rest, snippet: snippet(content, NEIGHBOUR_SNIPPET_CHARS) }, path };
         })
         : r.neighbours;
       return success({ count: r.neighbours.length, truncated: r.truncated, results });
