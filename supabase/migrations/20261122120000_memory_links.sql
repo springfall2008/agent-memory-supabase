@@ -87,6 +87,10 @@ begin
     v_to_scope := v_swap;
   end if;
 
+  -- Serialize link creation per from memory, so the existence check, the cap count and the insert below cannot interleave
+  -- with another call for the same memory (two calls at 99 links must not both pass the cap). Held until commit.
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_from::text, 0));
+
   -- Repeating a link that already exists (the reversed relates-to pair included) is a silent no-op, even at the cap.
   if exists (
     select 1 from agent_memory.memory_links l

@@ -29,6 +29,7 @@ import type {
   MemoryCategory,
   MemoryStats,
   MemoryStore,
+  Neighbour,
   NeighbourOptions,
   NeighboursResult,
   PruneOptions,
@@ -504,20 +505,19 @@ export class PgMemoryStore implements MemoryStore {
       const scopeIds = await this.resolveScopeIds(tx, o.scopes);
       const start = await tx<Row[]>`select id from agent_memory.memory_view where id = ${id}::uuid`;
       if (start.length === 0) throw notFoundMemory(id);
+      // One statement, so the walk and the memories it names come from the same snapshot: a memory deleted or moved
+      // while the walk runs drops out of the join instead of leaving a hole in the result.
       const rows = await tx<Row[]>`
-        select * from agent_memory.memory_neighbours(
+        select v.*, n.path as walk_path
+        from agent_memory.memory_neighbours(
           ${id}::uuid, ${direction}::text, ${o.types?.length ? tx.array(o.types) : null}::text[], ${depth}::int,
-          ${scopeIds}::uuid[], ${NEIGHBOURS_MAX_RESULTS + 1}::int)`;
+          ${scopeIds}::uuid[], ${NEIGHBOURS_MAX_RESULTS + 1}::int) with ordinality as n(id, depth, path, ord)
+        join agent_memory.memory_view v on v.id = n.id
+        order by n.ord`;
       const page = rows.slice(0, NEIGHBOURS_MAX_RESULTS);
-      if (page.length === 0) return { neighbours: [], truncated: false };
-      const memories = await tx<Row[]>`
-        select * from agent_memory.memory_view where id = any(${page.map((r) => r.id)}::uuid[])`;
-      const byId = new Map(memories.map((m) => [m.id as string, rowToMemory(m)]));
-      await this.addLinks(tx, [...byId.values()]);
-      return {
-        neighbours: page.map((r) => ({ memory: byId.get(r.id)!, path: r.path })),
-        truncated: rows.length > NEIGHBOURS_MAX_RESULTS,
-      };
+      const found = page.map((r) => ({ memory: rowToMemory(r), path: r.walk_path as Neighbour['path'] }));
+      await this.addLinks(tx, found.map((n) => n.memory));
+      return { neighbours: found, truncated: rows.length > NEIGHBOURS_MAX_RESULTS };
     });
   }
 

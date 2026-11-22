@@ -1,5 +1,5 @@
-import { assert, assertEquals, assertRejects } from '@std/assert';
-import { connect } from '../../supabase/functions/_shared/db.ts';
+import { assert, assertEquals, assertRejects, assertStringIncludes } from '@std/assert';
+import { connect, withMember } from '../../supabase/functions/_shared/db.ts';
 import { PgMemoryStore } from '../../supabase/functions/_shared/pg-store.ts';
 import { adminSql, LOCAL_DB_URL, makeWorld, type World } from '../helpers/fixtures.ts';
 import { FakeEmbedder } from '../helpers/fake-embedder.ts';
@@ -336,4 +336,33 @@ Deno.test('neighbours follows several hops and filters by type and direction', (
     // walking backwards from the end reaches the same chain, nearest first
     assertEquals(ids(await s.neighbours(md.id, { direction: 'in', depth: 2 })), [mc.id, mb.id]);
     assertEquals(ids(await s.neighbours(md.id, { direction: 'out', depth: 3 })), []);
+  }));
+
+Deno.test('two concurrent relates cannot both pass the outgoing cap', () =>
+  withWorld(async (w, admin, mk) => {
+    const { s, src, targets } = await fan(w, mk, 101);
+    await linkAll(admin, w, src.id, targets.slice(0, 99));
+    const other = connect(LOCAL_DB_URL);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let inserted!: () => void;
+      const insertedFirst = new Promise<void>((r) => (inserted = r));
+      // Transaction A takes the 100th link and stays open, so B cannot see it yet.
+      const a = withMember(other, w.rw.id, async (tx) => {
+        await tx`select agent_memory.relate_memories(${src.id}::uuid, ${targets[99].id}::uuid, 'depends-on')`;
+        inserted();
+        await gate;
+      });
+      await insertedFirst;
+      const b = s.relate(src.id, targets[100].id, 'depends-on').then(() => 'related', (e: Error) => e.message);
+      await new Promise((r) => setTimeout(r, 500));
+      release();
+      await a;
+      assertStringIncludes(await b, 'already has 100 outgoing links');
+      const [{ n }] = await admin`select count(*)::int as n from agent_memory.memory_links where from_id = ${src.id}`;
+      assertEquals(n, 100);
+    } finally {
+      await other.end();
+    }
   }));
