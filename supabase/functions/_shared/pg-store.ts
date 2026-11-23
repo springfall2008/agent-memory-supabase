@@ -13,6 +13,9 @@ import {
   CLAIM_DESCRIPTION_MAX,
   CLAIM_SNIPPET_CHARS,
   DEFAULT_LIMIT,
+  GRAPH_FULL_MAX_NODES,
+  GRAPH_MAX_NODES,
+  GRAPH_SNIPPET_CHARS,
   LINKS_SHOWN_MAX,
   MY_CLAIMS_MAX,
   NEIGHBOURS_DEFAULT_DEPTH,
@@ -33,6 +36,10 @@ import type {
   ClaimOptions,
   ClaimResult,
   Embedder,
+  GraphEdge,
+  GraphFilters,
+  GraphNode,
+  GraphResult,
   LinkDirection,
   LinkType,
   Memory,
@@ -202,7 +209,7 @@ export class PgMemoryStore implements MemoryStore {
    * Adds the active claim, if any, to each memory: holder, end and description, plus `mine` and the session only when
    * the caller holds it. One query for the whole set, never one per memory. Memories with no active claim gain no key.
    */
-  private async addClaims(tx: Tx, memories: Memory[]): Promise<void> {
+  private async addClaims(tx: Tx, memories: { id: string; claim?: MemoryClaim }[]): Promise<void> {
     if (memories.length === 0) return;
     const ids = [...new Set(memories.map((m) => m.id))];
     const rows = await tx<Row[]>`select * from agent_memory.memory_claims_for(${ids}::uuid[])`;
@@ -573,6 +580,59 @@ export class PgMemoryStore implements MemoryStore {
       await this.addLinks(tx, found.map((n) => n.memory));
       await this.addClaims(tx, found.map((n) => n.memory));
       return { neighbours: found, truncated: rows.length > NEIGHBOURS_MAX_RESULTS };
+    });
+  }
+
+  /**
+   * A project's graph: every readable memory matching the filters, oldest first (capped by detail), and every visible
+   * link between them. The links policy hides any link whose other end is unreadable or soft-deleted. No access-count
+   * bump and no decay, as for browse.
+   */
+  async graph(f: GraphFilters): Promise<GraphResult> {
+    if (!f.tags?.length && !f.tagsAll?.length) throw new StoreError('Pass tags or tags_all');
+    const full = f.detail === 'full';
+    const cap = full ? GRAPH_FULL_MAX_NODES : GRAPH_MAX_NODES;
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, f.scopes);
+      if (scopeIds.length === 0) return { nodes: [], edges: [], truncated: false, total: 0 };
+      const rows = await tx<Row[]>`
+        select id, scope, category, tags, content, created_at, count(*) over () as total
+        from agent_memory.memory_view
+        where scope_id = any(${scopeIds}::uuid[])
+          and (${f.category ?? null}::text is null or category = ${f.category ?? null}::text)
+          and (${f.tags?.length ? tx.array(f.tags) : null}::text[] is null
+               or tags && ${f.tags?.length ? tx.array(f.tags) : null}::text[])
+          and (${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[] is null
+               or tags @> ${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[])
+        order by created_at, id
+        limit ${cap}`;
+      const total = rows.length ? Number(rows[0].total) : 0;
+      const nodes: GraphNode[] = rows.map((r) => {
+        const n: GraphNode = {
+          id: r.id,
+          scope: r.scope,
+          category: r.category as MemoryCategory,
+          tags: r.tags,
+          createdAt: iso(r.created_at),
+        };
+        if (full) n.content = r.content;
+        else n.snippet = snippet(r.content, GRAPH_SNIPPET_CHARS);
+        return n;
+      });
+      if (nodes.length === 0) return { nodes, edges: [], truncated: false, total };
+      const ids = nodes.map((n) => n.id);
+      const linkRows = await tx<Row[]>`
+        select from_id, to_id, type from agent_memory.memory_links
+        where from_id = any(${ids}::uuid[]) and to_id = any(${ids}::uuid[])
+        order by created_at, from_id, to_id, type`;
+      const edges: GraphEdge[] = linkRows.map((r) => ({ from: r.from_id, to: r.to_id, type: r.type as LinkType }));
+      const replaced = await tx<Row[]>`
+        select distinct to_id from agent_memory.memory_links
+        where type = 'supersedes' and to_id = any(${ids}::uuid[])`;
+      const superseded = new Set(replaced.map((r) => r.to_id as string));
+      for (const n of nodes) if (superseded.has(n.id)) n.superseded = true;
+      await this.addClaims(tx, nodes);
+      return { nodes, edges, truncated: total > nodes.length, total };
     });
   }
 

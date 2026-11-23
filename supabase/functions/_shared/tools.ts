@@ -5,6 +5,8 @@ import {
   checkLimit,
   CLAIM_DEFAULT_MINUTES,
   CLAIM_DESCRIPTION_MAX,
+  GRAPH_FULL_MAX_NODES,
+  GRAPH_MAX_NODES,
   NEIGHBOUR_SNIPPET_CHARS,
   RECALL_EMBED_TOPICS_MAX,
   snippet,
@@ -268,6 +270,30 @@ export function handleRelease(store: MemoryStore) {
       return success({ released: await store.release(args.memory_id, args.force === true, sessionRef(args)) });
     } catch (err) {
       return error('Release failed', err);
+    }
+  };
+}
+
+export function handleGraph(store: MemoryStore) {
+  return async (args: {
+    scopes?: string[];
+    category?: MemoryCategory;
+    tags?: string[];
+    tags_all?: string[];
+    detail?: 'short' | 'full';
+  }) => {
+    try {
+      return success(
+        await store.graph({
+          scopes: scopesOrUndefined(args.scopes),
+          category: args.category,
+          tags: args.tags,
+          tagsAll: args.tags_all,
+          detail: args.detail,
+        }),
+      );
+    } catch (err) {
+      return error('Graph failed', err);
     }
   };
 }
@@ -559,6 +585,22 @@ export function registerTools(
       scopes: scopesSchema,
     }),
   }, handleNeighbours(store));
+
+  server.registerTool('graph', {
+    description:
+      'Read a whole project as a graph in one call: the memories matching the filters as `nodes` (id, scope, category, tags, createdAt, a short snippet, `superseded` and any active `claim`), oldest first, and every link between them as `edges` ({from, to, type}). ' +
+      `Pass tags (any) or tags_all (all), for example tags_all ["cairn:<project>"]. At most ${GRAPH_MAX_NODES} nodes, or ${GRAPH_FULL_MAX_NODES} with detail "full", which gives each node's whole content instead of a snippet; \`truncated\` says more matched and \`total\` counts them. ` +
+      'Links to memories outside the filtered set are left out. Does not count as an access.',
+    inputSchema: z.object({
+      scopes: z.array(z.string()).optional().describe('Scopes to read; default all you can read'),
+      category: categorySchema.optional().describe('Filter by category'),
+      tags: z.array(z.string()).optional().describe('Filter: memory must have at least one of these tags'),
+      tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
+      detail: z.enum(['short', 'full']).optional().describe(
+        `short (default): a snippet per node, up to ${GRAPH_MAX_NODES}; full: whole content, up to ${GRAPH_FULL_MAX_NODES}`,
+      ),
+    }),
+  }, handleGraph(store));
 
   server.registerTool('claim_memory', {
     description:

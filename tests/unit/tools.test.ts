@@ -4,6 +4,7 @@ import {
   handleClaim,
   handleClaimNext,
   handleFindRelated,
+  handleGraph,
   handleListRecent,
   handleMyClaims,
   handleNeighbours,
@@ -89,6 +90,10 @@ function mockStore(
     unrelate: (from, to, type) => {
       rec('unrelate', from, to, type);
       return Promise.resolve(opts.unrelated ?? true);
+    },
+    graph: (f) => {
+      rec('graph', f);
+      return Promise.resolve({ nodes: [], edges: [], truncated: false, total: 0 });
     },
     neighbours: (id, o) => {
       rec('neighbours', id, o);
@@ -326,7 +331,7 @@ Deno.test('handleUpdate with only tags passes only tags', async () => {
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
 });
 
-Deno.test('registerTools registers exactly 18 tools', () => {
+Deno.test('registerTools registers exactly 19 tools', () => {
   const { store } = mockStore();
   const { embedder } = mockEmbedder();
   const server = new McpServer({ name: 'test', version: '0.0.0' });
@@ -339,6 +344,7 @@ Deno.test('registerTools registers exactly 18 tools', () => {
       'claim_next',
       'delete',
       'find_related',
+      'graph',
       'list_recent',
       'list_scopes',
       'my_claims',
@@ -640,4 +646,31 @@ Deno.test('the claim_next description says oldest, free, and tags or tags_all', 
   }
   registered.claim_next.inputSchema.parse({ description: 'x', tags: ['t'], indefinite: true, session_label: 's' });
   assertThrows(() => registered.claim_next.inputSchema.parse({ tags: ['t'] }));
+});
+
+Deno.test('handleGraph maps tags_all and detail and returns the graph', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleGraph(store)({ tags_all: ['cairn:p1'], scopes: [], detail: 'full' });
+  assertEquals(calls.graph[0][0], {
+    scopes: undefined,
+    category: undefined,
+    tags: undefined,
+    tagsAll: ['cairn:p1'],
+    detail: 'full',
+  });
+  assertEquals(JSON.parse(r.content[0].text), { nodes: [], edges: [], truncated: false, total: 0 });
+});
+
+Deno.test('the graph tool describes nodes, edges and its caps', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, { description?: string; inputSchema: { parse: (v: unknown) => unknown } }>;
+  })._registeredTools;
+  const d = registered.graph.description ?? '';
+  for (const phrase of ['nodes', 'edges', '400', '100', 'tags_all', 'truncated']) assertStringIncludes(d, phrase);
+  registered.graph.inputSchema.parse({ tags: ['t'], detail: 'short' });
+  assertThrows(() => registered.graph.inputSchema.parse({ tags: ['t'], detail: 'huge' }));
 });

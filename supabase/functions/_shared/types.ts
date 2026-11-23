@@ -107,6 +107,42 @@ export interface MemoryLink {
   memoryId: string;
 }
 
+/** Which memories graph returns: the search filters without dates (tags or tagsAll is required). */
+export interface GraphFilters {
+  scopes?: string[];
+  category?: MemoryCategory;
+  tags?: string[];
+  tagsAll?: string[];
+  /** 'short' (default): a snippet per node; 'full': the whole content, with a lower node cap. */
+  detail?: 'short' | 'full';
+}
+
+export interface GraphNode {
+  id: string;
+  scope: string;
+  category: MemoryCategory;
+  tags: string[];
+  createdAt: string;
+  snippet?: string;
+  content?: string;
+  superseded?: true;
+  claim?: MemoryClaim;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  type: LinkType;
+}
+
+export interface GraphResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  /** True when more memories matched than were returned (`total` counts them all). */
+  truncated: boolean;
+  total: number;
+}
+
 export interface NeighbourOptions {
   direction?: LinkDirection;
   types?: LinkType[];
@@ -221,6 +257,7 @@ export interface MemoryStore {
   relate(from: string, to: string, type: LinkType): Promise<void>;
   unrelate(from: string, to: string, type: LinkType): Promise<boolean>;
   neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult>;
+  graph(f: GraphFilters): Promise<GraphResult>;
   claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult>;
   release(id: string, force?: boolean, s?: SessionRef): Promise<boolean>;
   myClaims(scopes?: string[]): Promise<MyClaim[]>;
