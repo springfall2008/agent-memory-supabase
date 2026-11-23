@@ -42,7 +42,8 @@ label from SKILL.md, made once in this conversation, for every claim call.
    - **Plan.** Count the open intents, claimed or not. Write new intents until that count reaches the goal's
      `Max open intents`. Each new intent must:
      - not overlap any open intent, or any done intent whose fact already answers it;
-     - cite the facts and hints that prompted it, linked `derived-from` each one (round 1 has none);
+     - cite the one to three facts or hints that most directly prompted it, linked `derived-from` each (round 1 has
+       none). Background everyone already knows belongs in the progress memory, not in links;
      - follow the intent template below, describing only the task. How to use the board is in this skill, not in
        intents.
 
