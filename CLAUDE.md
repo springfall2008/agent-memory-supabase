@@ -37,8 +37,8 @@ boot a half-written file and fail with BOOT_ERROR or "Unexpected eof".
   `resolve_member`, which hashes the token and requires an unrevoked, unexpired token of a non-deactivated member. It
   returns `{ memberId, isAdmin }`. Identity comes only from the token; nothing in the request body or headers can name a
   member.
-- **MCP server:** a fresh, stateless McpServer is built per request. `registerTools` (`_shared/tools.ts`) adds the 17
-  memory tools, and `registerThreadTools` (`_shared/thread-tools.ts`) the 11 thread tools, so every member gets 28.
+- **MCP server:** a fresh, stateless McpServer is built per request. `registerTools` (`_shared/tools.ts`) adds the 19
+  memory tools, and `registerThreadTools` (`_shared/thread-tools.ts`) the 11 thread tools, so every member gets 30.
   `registerAdminTools` (`_shared/admin-tools.ts`) adds the 13 `admin_` tools for admins only.
 - **`/embed`:** `POST …/embed` returns a gte-small vector for the importer.
 
@@ -79,11 +79,21 @@ per result set. A superseded memory is flagged, not demoted. Design:
 **Claims.** `memory_claims` holds at most one claim per memory (primary key `memory_id`): member, optional session,
 reason, `claimed_at`, `expires_at` (null = indefinite). A claim is active while unexpired, its memory is readable and
 undeleted (the select policy), and `claim_holder_active` says its member is not deactivated. `claim_memory` and
-`release_claim` take an advisory lock per memory, so two callers cannot both find it free; the holder is the member, and
-the session is information shown only to the holder. `PgMemoryStore.addClaims` attaches `claim` next to every `addLinks`
-call, from one batched `memory_claims_for` query. Claims never block `update` or `delete`. A pre-migration backup must
-use the pre-claims `backup.ts`, because the new one reads `memory_claims`. Design:
-`docs/superpowers/specs/2026-11-22-memory-claims-design.md`.
+`release_claim` take an advisory lock per memory, so two callers cannot both find it free. The holder is the pair
+(member, session), with a null session equal only to null: another session of the same member is refused unless `force`,
+and refusals come from `claim_held_message`. A named session that does not resolve is `Session not found`, never "no
+session". `claim_next` scans candidates oldest first and takes each one's lock with `pg_try_advisory_xact_lock`,
+skipping a locked one rather than waiting, then re-checks it under the lock; being security definer, it applies
+`can_read`, `can_write`, soft delete and "not superseded by a readable memory" itself. `PgMemoryStore.addClaims`
+attaches `claim` next to every `addLinks` call, from one batched `memory_claims_for` query. Claims never block `update`
+or `delete`. A pre-migration backup must use the pre-claims `backup.ts`, because the new one reads `memory_claims`.
+Design: `docs/superpowers/specs/2026-11-22-memory-claims-design.md` and
+`docs/superpowers/specs/2026-11-23-claims-by-session-graph-claim-next-design.md`.
+
+**Graph.** `PgMemoryStore.graph` needs no SQL function: it runs as the member, selects `memory_view` with the search
+filters (tags or tags_all required) oldest first, capped at `GRAPH_MAX_NODES` (400) or `GRAPH_FULL_MAX_NODES` (100) for
+full content, with `count(*) over ()` as `total`, then reads `memory_links` between those ids (the links policy hides
+unreadable or deleted ends), the superseded set, and the batched claims. No decay and no `touch_accessed`.
 
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in

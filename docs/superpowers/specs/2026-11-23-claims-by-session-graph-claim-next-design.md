@@ -1,7 +1,7 @@
 # Claims held by session, `graph` and `claim_next` — design
 
 Date: 2026-11-23
-Status: approved design, not yet built
+Status: implemented (local build and tests; not yet deployed)
 Builds on: [memory claims](2026-11-22-memory-claims-design.md) (this changes its "who the holder is" rule) and
 [memory links](2026-11-22-memory-links-design.md)
 

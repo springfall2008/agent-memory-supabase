@@ -49,7 +49,9 @@ A new table, added by a new migration (never by editing an old one):
   `select` only; every write goes through a `SECURITY DEFINER` function with `search_path = ''`, execute revoked from
   public and granted to `agent_memory_member`.
 
-**Who the holder is.** The holder is the **member**. Any session of that member can renew or release the claim, and two
+**Who the holder is.** (Changed on 2026-11-23: the holder is now the member and the session together; see
+[claims by session](2026-11-23-claims-by-session-graph-claim-next-design.md), section 3. The text below is the original
+design.) The holder is the **member**. Any session of that member can renew or release the claim, and two
 agents that share one token are one holder, which is a documented limit. The claim also records the agent session that
 made or last renewed it (null when the caller gave none), purely as information: it never decides who may do what. If that
 session is later deleted the column becomes null. Sessions are private to their member in this codebase, so the session
