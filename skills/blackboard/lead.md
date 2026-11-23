@@ -19,8 +19,10 @@ label from SKILL.md, made once in this conversation, for every claim call.
    If it is refused, report who holds the lead and until when, write nothing, and **end the loop**. Two leads never run.
    Each round renews the 30 minutes, so pace a `/loop` at under 30 minutes between rounds.
 4. **Read the board.**
-   - Call `graph` with `tags_all ["board:<project>"]`, short detail. This gives every intent, with its state and any
-     active `claim`.
+   - Call `graph` with `tags_all ["board:<project>", "kind:intent"]`, short detail. This gives every intent, with its
+     state and any active `claim`. If the result says `truncated: true`, the board has outgrown one read: tell the
+     person to start a fresh board for the next phase, write nothing, and **end the loop**. Planning from a partial list
+     would duplicate intents.
    - Call `graph` with `tags_all ["board:<project>", "kind:rules"]`, full; then the same for `kind:progress`.
    - Read what is new since the progress memory's `Last round at`. Call `search` with no query,
      `tags_all
@@ -55,7 +57,7 @@ label from SKILL.md, made once in this conversation, for every claim call.
 6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below.
 7. **If an intent is free and you have time,** you may do one exactly as work.md does, using your lead label.
 8. **End the round,** keeping your claim on the goal: it holds the lead role until the next round renews it. Say in two
-   or three lines what the round decided.
+   or three lines what the round decided, ending with `(label: <your lead label>)`.
 
 ## Intent template
 

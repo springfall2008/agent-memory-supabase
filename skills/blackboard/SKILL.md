@@ -73,6 +73,10 @@ Generate the hex with `openssl rand -hex 2` or `python3 -c "import secrets; prin
 fixed label such as `board-<project>-lead` or `<project>-worker`: every session shares one member token, so two sessions
 with the same label are one claim holder, and each can renew or release the other's claims.
 
+End every round or cycle by repeating your label, as the recipes say, so it survives a long conversation being
+summarised. Before making a label, look for `(label: …)` earlier in this conversation for this board and role, and reuse
+it if you find one.
+
 ## Running in a loop
 
 Each `lead` or `work` invocation is one round or one cycle. To keep going, run it under `/loop`:
@@ -89,12 +93,18 @@ further wake-up; in a fixed-interval `/loop`, delete its cron job.
 
 ## status
 
-This command is read-only. Call `graph` with `tags_all ["board:<project>"]` and short detail (full returns only the
-oldest 100), then read the goal, the progress memory and any conclusion in full. Report, in this order:
+This command is read-only. Read the goal, the progress memory and any conclusion in full, using `graph` with
+`tags_all ["board:<project>", "kind:<kind>"]` for each. Read the intents with `graph`,
+`tags_all ["board:<project>",
+"kind:intent"]`, short detail. Read the newest facts with `search` with no query,
+`tags_all ["board:<project>",
+"kind:fact"]` and `limit 5`, since browse returns newest first while `graph` returns
+oldest first. Report, in this order:
 
 1. The goal, its `state:` and its Done when.
 2. The progress summary.
-3. The intents: one line each, giving its state, who holds its claim and until when, and its first line.
+3. The intents: one line each, giving its state, who holds its claim and until when, and its first line. If `graph` said
+   `truncated: true`, say the list is incomplete.
 4. The five newest facts, each with its verdict and first line.
 5. The conclusion, if there is one.
 
