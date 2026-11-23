@@ -2,6 +2,7 @@ import { assert, assertEquals, assertStringIncludes, assertThrows } from '@std/a
 import { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import {
   handleClaim,
+  handleClaimNext,
   handleFindRelated,
   handleListRecent,
   handleMyClaims,
@@ -105,6 +106,10 @@ function mockStore(
     myClaims: (scopes) => {
       rec('myClaims', scopes);
       return Promise.resolve(opts.myClaims ?? []);
+    },
+    claimNext: (f, description, o, s) => {
+      rec('claimNext', f, description, o, s);
+      return Promise.resolve({ claimed: false as const });
     },
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
@@ -321,7 +326,7 @@ Deno.test('handleUpdate with only tags passes only tags', async () => {
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
 });
 
-Deno.test('registerTools registers exactly 17 tools', () => {
+Deno.test('registerTools registers exactly 18 tools', () => {
   const { store } = mockStore();
   const { embedder } = mockEmbedder();
   const server = new McpServer({ name: 'test', version: '0.0.0' });
@@ -331,6 +336,7 @@ Deno.test('registerTools registers exactly 17 tools', () => {
     Object.keys(registered).sort(),
     [
       'claim_memory',
+      'claim_next',
       'delete',
       'find_related',
       'list_recent',
@@ -600,4 +606,38 @@ Deno.test('the claim tools validate their arguments and describe the rules', () 
   for (const stale of ['share a token', 'previousSession']) assertEquals(d.includes(stale), false);
   assertStringIncludes(registered.release_claim.description ?? '', 'same session');
   for (const tool of ['search', 'recall']) assertStringIncludes(registered[tool].description ?? '', 'claim');
+});
+
+Deno.test('handleClaimNext maps tags_all, the options and the session', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleClaimNext(store)({
+    description: 'exploring',
+    tags_all: ['kind:intent', 'status:open'],
+    scopes: [],
+    category: 'other',
+    minutes: 30,
+    session_label: 'worker-1',
+  });
+  const [f, description, o, s] = calls.claimNext[0];
+  assertEquals(f, { scopes: undefined, category: 'other', tags: undefined, tagsAll: ['kind:intent', 'status:open'] });
+  assertEquals(description, 'exploring');
+  assertEquals(o, { minutes: 30, indefinite: undefined });
+  assertEquals(s, { sessionLabel: 'worker-1' });
+  assertEquals(JSON.parse(r.content[0].text), { claimed: false });
+});
+
+Deno.test('the claim_next description says oldest, free, and tags or tags_all', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, { description?: string; inputSchema: { parse: (v: unknown) => unknown } }>;
+  })._registeredTools;
+  const d = registered.claim_next.description ?? '';
+  for (const phrase of ['oldest', 'nobody', 'superseded', 'tags_all', 'claimed: false', 'wait']) {
+    assertStringIncludes(d, phrase);
+  }
+  registered.claim_next.inputSchema.parse({ description: 'x', tags: ['t'], indefinite: true, session_label: 's' });
+  assertThrows(() => registered.claim_next.inputSchema.parse({ tags: ['t'] }));
 });

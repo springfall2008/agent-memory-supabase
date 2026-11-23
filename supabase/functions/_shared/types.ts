@@ -75,6 +75,16 @@ export interface ClaimResult {
   overridden?: { by: string; until: string | null; description: string; session?: ClaimSession };
 }
 
+/** Which memories claim_next may take: the search filters without dates (tags or tagsAll is required). */
+export interface ClaimNextFilters {
+  scopes?: string[];
+  category?: MemoryCategory;
+  tags?: string[];
+  tagsAll?: string[];
+}
+
+export type ClaimNextResult = { claimed: true; until: string | null; memory: Memory } | { claimed: false };
+
 export interface MyClaim {
   memory: { id: string; scope: string; category: MemoryCategory; tags: string[]; snippet: string };
   description: string;
@@ -214,6 +224,12 @@ export interface MemoryStore {
   claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult>;
   release(id: string, force?: boolean, s?: SessionRef): Promise<boolean>;
   myClaims(scopes?: string[]): Promise<MyClaim[]>;
+  claimNext(
+    f: ClaimNextFilters,
+    description: string,
+    o: { minutes?: number; indefinite?: boolean },
+    s?: SessionRef,
+  ): Promise<ClaimNextResult>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;
   delete(id: string): Promise<void>;

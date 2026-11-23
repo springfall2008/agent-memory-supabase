@@ -272,6 +272,32 @@ export function handleRelease(store: MemoryStore) {
   };
 }
 
+export function handleClaimNext(store: MemoryStore) {
+  return async (
+    args: {
+      description: string;
+      scopes?: string[];
+      category?: MemoryCategory;
+      tags?: string[];
+      tags_all?: string[];
+      minutes?: number;
+      indefinite?: boolean;
+    } & SessionArgs,
+  ) => {
+    try {
+      const result = await store.claimNext(
+        { scopes: scopesOrUndefined(args.scopes), category: args.category, tags: args.tags, tagsAll: args.tags_all },
+        args.description,
+        { minutes: args.minutes, indefinite: args.indefinite },
+        sessionRef(args),
+      );
+      return success(result);
+    } catch (err) {
+      return error('Claim next failed', err);
+    }
+  };
+}
+
 export function handleMyClaims(store: MemoryStore) {
   return async (args: { scopes?: string[] }) => {
     try {
@@ -551,6 +577,26 @@ export function registerTools(
       ...sessionShape,
     }),
   }, handleClaim(store));
+
+  server.registerTool('claim_next', {
+    description:
+      'Claim the next piece of work from a queue: the oldest memory matching the filters that nobody holds an active claim on, that you can write, and that is not superseded. ' +
+      'Pass tags (any) or tags_all (all), for example tags_all ["kind:intent", "status:open"]. It never waits for another caller: a memory someone is claiming at that moment is skipped, so parallel workers get different memories. ' +
+      'Returns the claimed memory in full with `until`, or `claimed: false` when nothing is free. ' +
+      `The claim works as claim_memory's does (default ${CLAIM_DEFAULT_MINUTES} minutes, or indefinite); pass your session (a new label creates it) and release with the same one.`,
+    inputSchema: z.object({
+      description: z.string().describe(`Why you are claiming it, 1-${CLAIM_DESCRIPTION_MAX} characters`),
+      scopes: z.array(z.string()).optional().describe('Scopes to take from; default all you can read'),
+      category: categorySchema.optional().describe('Filter by category'),
+      tags: z.array(z.string()).optional().describe('Filter: memory must have at least one of these tags'),
+      tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
+      minutes: z.number().optional().describe(
+        `How long the claim lasts, in whole minutes (default ${CLAIM_DEFAULT_MINUTES})`,
+      ),
+      indefinite: z.boolean().optional().describe('Claim with no end, until released (not with minutes)'),
+      ...sessionShape,
+    }),
+  }, handleClaimNext(store));
 
   server.registerTool('release_claim', {
     description:

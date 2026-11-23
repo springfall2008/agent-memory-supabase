@@ -267,3 +267,112 @@ Deno.test('an expired claim is not shown', () =>
     assertEquals('claim' in pick(await rw.listRecent(10), a.id), false);
     assertEquals(await rw.myClaims(), []);
   }));
+
+const intent = (content: string, extra: string[] = []) => ({
+  content,
+  category: 'other' as const,
+  tags: ['kind:intent', 'status:open', ...extra],
+});
+
+Deno.test('claimNext returns the oldest free match with its links and claim', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('first intent', [tag]));
+    const b = await rw.store(w.alpha.name, intent('second intent', [tag]));
+    await rw.relate(b.id, a.id, 'depends-on');
+    const first = await rw.claimNext({ tagsAll: [tag] }, 'exploring', {}, { sessionLabel: 'worker-1' });
+    if (!first.claimed) throw new Error('expected a claim');
+    assertEquals(first.memory.id, a.id);
+    assertEquals(first.memory.content, 'first intent');
+    assertEquals(first.memory.claim?.mine, true);
+    assertEquals(first.memory.links?.[0]?.memoryId, b.id);
+    assertEquals(Math.round(minutesAhead(first.until)!), 60);
+    const second = await rw.claimNext({ tags: [tag] }, 'exploring', { indefinite: true }, { sessionLabel: 'worker-1' });
+    if (!second.claimed) throw new Error('expected a claim');
+    assertEquals([second.memory.id, second.until], [b.id, null]);
+    assertEquals(await rw.claimNext({ tags: [tag] }, 'exploring', {}), { claimed: false });
+  }));
+
+Deno.test('claimNext with a new session label creates the session', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    await rw.store(w.alpha.name, intent('only intent', [tag]));
+    await rw.claimNext({ tags: [tag] }, 'exploring', {}, { sessionLabel: 'brand-new-worker' });
+    assertEquals((await rw.myClaims())[0].session?.label, 'brand-new-worker');
+  }));
+
+Deno.test('claimNext validates its arguments', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    await assertRejects(() => rw.claimNext({}, 'x', {}), Error, 'Pass tags or tags_all');
+    await assertRejects(() => rw.claimNext({ tags: ['t'] }, ' ', {}), Error, 'Description must be 1-200 characters');
+    await assertRejects(
+      () => rw.claimNext({ tags: ['t'] }, 'x', { minutes: 5, indefinite: true }),
+      Error,
+      'Pass minutes or indefinite, not both',
+    );
+    await assertRejects(() => rw.claimNext({ tags: ['t'], scopes: ['no-such-scope'] }, 'x', {}), Error, 'not found');
+  }));
+
+Deno.test('claimNext does not wait for, or take, a memory another caller is claiming', () =>
+  withWorld(async (w, admin, mk) => {
+    const { bw } = await contenders(w, admin, mk);
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('first', [tag]));
+    const b = await rw.store(w.alpha.name, intent('second', [tag]));
+    const other = connect(LOCAL_DB_URL);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let claimed!: () => void;
+      const claimedFirst = new Promise<void>((r) => (claimed = r));
+      const held = withMember(other, w.rw.id, async (tx) => {
+        const [r] = await tx`select * from agent_memory.claim_next(null, null, ${[
+          tag,
+        ]}::text[], null, 'A', 60, false, null)`;
+        assertEquals(r.memory_id, a.id);
+        claimed();
+        await gate;
+      });
+      await claimedFirst;
+      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error('claimNext waited')), 5000));
+      const got = await Promise.race([bw.claimNext({ tags: [tag] }, 'B', {}), timeout]);
+      release();
+      await held;
+      if (!got.claimed) throw new Error('expected a claim');
+      assertEquals(got.memory.id, b.id);
+    } finally {
+      await other.end();
+    }
+  }));
+
+Deno.test('claim_memory waits for claimNext and is then refused', () =>
+  withWorld(async (w, admin, mk) => {
+    const { bw } = await contenders(w, admin, mk);
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('contended', [tag]));
+    const other = connect(LOCAL_DB_URL);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let claimed!: () => void;
+      const claimedFirst = new Promise<void>((r) => (claimed = r));
+      const held = withMember(other, w.rw.id, async (tx) => {
+        await tx`select * from agent_memory.claim_next(null, null, ${[tag]}::text[], null, 'A', 60, false, null)`;
+        claimed();
+        await gate;
+      });
+      await claimedFirst;
+      const b = bw.claim(a.id, 'B', {}).then(() => 'claimed', (e: Error) => e.message);
+      await new Promise((r) => setTimeout(r, 500));
+      release();
+      await held;
+      assertStringIncludes(await b, `is claimed by ${w.rw.name}`);
+    } finally {
+      await other.end();
+    }
+  }));
