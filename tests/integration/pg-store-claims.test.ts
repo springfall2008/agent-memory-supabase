@@ -53,16 +53,71 @@ Deno.test('claim then a second member is refused, and force takes over', () =>
     await assertRejects(() => rw.claim(m.id, 'back again', {}), Error, `is claimed by ${w.bw.name} until`);
   }));
 
-Deno.test('renewal from another session reports previousSession', () =>
+Deno.test('a claim held by one session refuses another session of the same member', () =>
   withWorld(async (w, _a, mk) => {
     const [rw] = mk(w.rw.id);
     const m = await rw.store(w.alpha.name, req('a ticket'));
     await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
-    const again = await rw.claim(m.id, 'second look', {}, { sessionLabel: 's-b' });
-    assertEquals(again.previousSession?.label, 's-a');
-    assertEquals(typeof again.previousSession?.id, 'string');
-    const same = await rw.claim(m.id, 'third look', {}, { sessionLabel: 's-b' });
-    assertEquals(same.previousSession, undefined);
+    await assertRejects(
+      () => rw.claim(m.id, 'second look', {}, { sessionLabel: 's-b' }),
+      Error,
+      "is claimed by your session 's-a' until",
+    );
+    await assertRejects(() => rw.claim(m.id, 'no session', {}), Error, "is claimed by your session 's-a' until");
+    const same = await rw.claim(m.id, 'third look', {}, { sessionLabel: 's-a' });
+    assertEquals(same.overridden, undefined);
+  }));
+
+Deno.test('force over an own other session reports it', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
+    const forced = await rw.claim(m.id, 'taking over', { force: true }, { sessionLabel: 's-b' });
+    assertEquals(forced.overridden?.by, w.rw.name);
+    assertEquals(forced.overridden?.session?.label, 's-a');
+    assertEquals(typeof forced.overridden?.session?.id, 'string');
+    assertEquals('previousSession' in forced, false);
+  }));
+
+Deno.test('another member forcing never sees the holder session', () =>
+  withWorld(async (w, admin, mk) => {
+    const { rw, bw } = await contenders(w, admin, mk);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'mine', {}, { sessionLabel: 's-a' });
+    const forced = await bw.claim(m.id, 'taking over', { force: true });
+    assertEquals(forced.overridden?.by, w.rw.name);
+    assertEquals(forced.overridden?.session, undefined);
+  }));
+
+Deno.test('release with an unknown session label is Session not found and keeps the claim', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'no session claim', {});
+    await assertRejects(() => rw.release(m.id, false, { sessionLabel: 'never-made' }), Error, 'Session not found');
+    assertEquals((await rw.myClaims()).map((c) => c.memory.id), [m.id]);
+  }));
+
+Deno.test('release by another session needs force; the holding session releases', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    const n = await rw.store(w.alpha.name, req('another ticket'));
+    await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
+    await rw.claim(n.id, 'n look', {}, { sessionLabel: 's-b' });
+    await assertRejects(
+      () => rw.release(m.id, false, { sessionLabel: 's-b' }),
+      Error,
+      "claimed by your session 's-a' until",
+    );
+    await assertRejects(
+      () => rw.release(m.id),
+      Error,
+      'release it from that session, or pass force to release it anyway',
+    );
+    assertEquals(await rw.release(m.id, true, { sessionLabel: 's-b' }), true);
+    assertEquals(await rw.release(n.id, false, { sessionLabel: 's-b' }), true);
   }));
 
 Deno.test('minutes defaults to 60 and indefinite has no end', () =>
@@ -219,4 +274,113 @@ Deno.test('an expired claim is not shown', () =>
       set claimed_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' where memory_id = ${a.id}`;
     assertEquals('claim' in pick(await rw.listRecent(10), a.id), false);
     assertEquals(await rw.myClaims(), []);
+  }));
+
+const intent = (content: string, extra: string[] = []) => ({
+  content,
+  category: 'other' as const,
+  tags: ['kind:intent', 'status:open', ...extra],
+});
+
+Deno.test('claimNext returns the oldest free match with its links and claim', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('first intent', [tag]));
+    const b = await rw.store(w.alpha.name, intent('second intent', [tag]));
+    await rw.relate(b.id, a.id, 'depends-on');
+    const first = await rw.claimNext({ tagsAll: [tag] }, 'exploring', {}, { sessionLabel: 'worker-1' });
+    if (!first.claimed) throw new Error('expected a claim');
+    assertEquals(first.memory.id, a.id);
+    assertEquals(first.memory.content, 'first intent');
+    assertEquals(first.memory.claim?.mine, true);
+    assertEquals(first.memory.links?.[0]?.memoryId, b.id);
+    assertEquals(Math.round(minutesAhead(first.until)!), 60);
+    const second = await rw.claimNext({ tags: [tag] }, 'exploring', { indefinite: true }, { sessionLabel: 'worker-1' });
+    if (!second.claimed) throw new Error('expected a claim');
+    assertEquals([second.memory.id, second.until], [b.id, null]);
+    assertEquals(await rw.claimNext({ tags: [tag] }, 'exploring', {}), { claimed: false });
+  }));
+
+Deno.test('claimNext with a new session label creates the session', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    await rw.store(w.alpha.name, intent('only intent', [tag]));
+    await rw.claimNext({ tags: [tag] }, 'exploring', {}, { sessionLabel: 'brand-new-worker' });
+    assertEquals((await rw.myClaims())[0].session?.label, 'brand-new-worker');
+  }));
+
+Deno.test('claimNext validates its arguments', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    await assertRejects(() => rw.claimNext({}, 'x', {}), Error, 'Pass tags or tags_all');
+    await assertRejects(() => rw.claimNext({ tags: ['t'] }, ' ', {}), Error, 'Description must be 1-200 characters');
+    await assertRejects(
+      () => rw.claimNext({ tags: ['t'] }, 'x', { minutes: 5, indefinite: true }),
+      Error,
+      'Pass minutes or indefinite, not both',
+    );
+    await assertRejects(() => rw.claimNext({ tags: ['t'], scopes: ['no-such-scope'] }, 'x', {}), Error, 'not found');
+  }));
+
+Deno.test('claimNext does not wait for, or take, a memory another caller is claiming', () =>
+  withWorld(async (w, admin, mk) => {
+    const { bw } = await contenders(w, admin, mk);
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('first', [tag]));
+    const b = await rw.store(w.alpha.name, intent('second', [tag]));
+    const other = connect(LOCAL_DB_URL);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let claimed!: () => void;
+      const claimedFirst = new Promise<void>((r) => (claimed = r));
+      const held = withMember(other, w.rw.id, async (tx) => {
+        const [r] = await tx`select * from agent_memory.claim_next(null, null, ${[
+          tag,
+        ]}::text[], null, 'A', 60, false, null)`;
+        assertEquals(r.memory_id, a.id);
+        claimed();
+        await gate;
+      });
+      await claimedFirst;
+      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error('claimNext waited')), 5000));
+      const got = await Promise.race([bw.claimNext({ tags: [tag] }, 'B', {}), timeout]);
+      release();
+      await held;
+      if (!got.claimed) throw new Error('expected a claim');
+      assertEquals(got.memory.id, b.id);
+    } finally {
+      await other.end();
+    }
+  }));
+
+Deno.test('claim_memory waits for claimNext and is then refused', () =>
+  withWorld(async (w, admin, mk) => {
+    const { bw } = await contenders(w, admin, mk);
+    const [rw] = mk(w.rw.id);
+    const tag = `q-${crypto.randomUUID().slice(0, 8)}`;
+    const a = await rw.store(w.alpha.name, intent('contended', [tag]));
+    const other = connect(LOCAL_DB_URL);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let claimed!: () => void;
+      const claimedFirst = new Promise<void>((r) => (claimed = r));
+      const held = withMember(other, w.rw.id, async (tx) => {
+        await tx`select * from agent_memory.claim_next(null, null, ${[tag]}::text[], null, 'A', 60, false, null)`;
+        claimed();
+        await gate;
+      });
+      await claimedFirst;
+      const b = bw.claim(a.id, 'B', {}).then(() => 'claimed', (e: Error) => e.message);
+      await new Promise((r) => setTimeout(r, 500));
+      release();
+      await held;
+      assertStringIncludes(await b, `is claimed by ${w.rw.name}`);
+    } finally {
+      await other.end();
+    }
   }));

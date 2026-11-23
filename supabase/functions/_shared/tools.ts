@@ -5,6 +5,8 @@ import {
   checkLimit,
   CLAIM_DEFAULT_MINUTES,
   CLAIM_DESCRIPTION_MAX,
+  GRAPH_FULL_MAX_NODES,
+  GRAPH_MAX_NODES,
   NEIGHBOUR_SNIPPET_CHARS,
   RECALL_EMBED_TOPICS_MAX,
   snippet,
@@ -263,11 +265,61 @@ export function handleClaim(store: MemoryStore) {
 }
 
 export function handleRelease(store: MemoryStore) {
-  return async (args: { memory_id: string; force?: boolean }) => {
+  return async (args: { memory_id: string; force?: boolean } & SessionArgs) => {
     try {
-      return success({ released: await store.release(args.memory_id, args.force === true) });
+      return success({ released: await store.release(args.memory_id, args.force === true, sessionRef(args)) });
     } catch (err) {
       return error('Release failed', err);
+    }
+  };
+}
+
+export function handleGraph(store: MemoryStore) {
+  return async (args: {
+    scopes?: string[];
+    category?: MemoryCategory;
+    tags?: string[];
+    tags_all?: string[];
+    detail?: 'short' | 'full';
+  }) => {
+    try {
+      return success(
+        await store.graph({
+          scopes: scopesOrUndefined(args.scopes),
+          category: args.category,
+          tags: args.tags,
+          tagsAll: args.tags_all,
+          detail: args.detail,
+        }),
+      );
+    } catch (err) {
+      return error('Graph failed', err);
+    }
+  };
+}
+
+export function handleClaimNext(store: MemoryStore) {
+  return async (
+    args: {
+      description: string;
+      scopes?: string[];
+      category?: MemoryCategory;
+      tags?: string[];
+      tags_all?: string[];
+      minutes?: number;
+      indefinite?: boolean;
+    } & SessionArgs,
+  ) => {
+    try {
+      const result = await store.claimNext(
+        { scopes: scopesOrUndefined(args.scopes), category: args.category, tags: args.tags, tagsAll: args.tags_all },
+        args.description,
+        { minutes: args.minutes, indefinite: args.indefinite },
+        sessionRef(args),
+      );
+      return success(result);
+    } catch (err) {
+      return error('Claim next failed', err);
     }
   };
 }
@@ -534,13 +586,28 @@ export function registerTools(
     }),
   }, handleNeighbours(store));
 
+  server.registerTool('graph', {
+    description:
+      'Read a whole project as a graph in one call: the memories matching the filters as `nodes` (id, scope, category, tags, createdAt, a short snippet, `superseded` and any active `claim`), oldest first, and every link between them as `edges` ({from, to, type}). ' +
+      `Pass tags (any) or tags_all (all), for example tags_all ["cairn:<project>"]. At most ${GRAPH_MAX_NODES} nodes, or ${GRAPH_FULL_MAX_NODES} with detail "full", which gives each node's whole content instead of a snippet; \`truncated\` says more matched and \`total\` counts them. ` +
+      'Links to memories outside the filtered set are left out. Does not count as an access.',
+    inputSchema: z.object({
+      scopes: z.array(z.string()).optional().describe('Scopes to read; default all you can read'),
+      category: categorySchema.optional().describe('Filter by category'),
+      tags: z.array(z.string()).optional().describe('Filter: memory must have at least one of these tags'),
+      tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
+      detail: z.enum(['short', 'full']).optional().describe(
+        `short (default): a snippet per node, up to ${GRAPH_MAX_NODES}; full: whole content, up to ${GRAPH_FULL_MAX_NODES}`,
+      ),
+    }),
+  }, handleGraph(store));
+
   server.registerTool('claim_memory', {
     description:
       'Claim a memory to say you are working on it, so other agents see it is taken before they start. The claim shows on the memory in search, recall and list results. Claims are advisory: they never stop anyone reading, updating or deleting the memory. ' +
       `It lasts \`minutes\` (default ${CLAIM_DEFAULT_MINUTES} minutes, no fixed maximum, so a week is 10080) or, with \`indefinite\`, until released. ` +
-      'Claiming a memory you already hold renews it. Claiming one another member holds fails and says who holds it, until when and why; `force` takes it over. ' +
-      "You need write access to the memory's scope. Pass your session so you can later tell which session made the claim. " +
-      "A claim belongs to the member, so agents that share a token count as one holder: before claiming, compare a memory's `claim.session` with your own, and if the result carries `previousSession`, another session of your member was working on it.",
+      'A claim belongs to your member and session together: claiming again from the same session renews it. A claim held by another member, or by another session of your own member, fails and says who holds it, until when and why; `force` takes it over and the result reports the claim it replaced. ' +
+      "You need write access to the memory's scope. Always pass your session (a new label creates it), and pass the same one to release_claim.",
     inputSchema: z.object({
       memory_id: z.string().describe('ID of the memory to claim'),
       description: z.string().describe(`Why you are claiming it, 1-${CLAIM_DESCRIPTION_MAX} characters`),
@@ -548,17 +615,38 @@ export function registerTools(
         `How long the claim lasts, in whole minutes (default ${CLAIM_DEFAULT_MINUTES})`,
       ),
       indefinite: z.boolean().optional().describe('Claim with no end, until released (not with minutes)'),
-      force: z.boolean().optional().describe("Take over another member's active claim"),
+      force: z.boolean().optional().describe('Take over an active claim held by another member or session'),
       ...sessionShape,
     }),
   }, handleClaim(store));
 
+  server.registerTool('claim_next', {
+    description:
+      'Claim the next piece of work from a queue: the oldest memory matching the filters that nobody holds an active claim on, that you can write, and that is not superseded. ' +
+      'Pass tags (any) or tags_all (all), for example tags_all ["kind:intent", "status:open"]. It never waits for another caller: a memory someone is claiming at that moment is skipped, so parallel workers get different memories. ' +
+      'Returns the claimed memory in full with `until`, or `claimed: false` when nothing is free. ' +
+      `The claim works as claim_memory's does (default ${CLAIM_DEFAULT_MINUTES} minutes, or indefinite); pass your session (a new label creates it) and release with the same one.`,
+    inputSchema: z.object({
+      description: z.string().describe(`Why you are claiming it, 1-${CLAIM_DESCRIPTION_MAX} characters`),
+      scopes: z.array(z.string()).optional().describe('Scopes to take from; default all you can read'),
+      category: categorySchema.optional().describe('Filter by category'),
+      tags: z.array(z.string()).optional().describe('Filter: memory must have at least one of these tags'),
+      tags_all: z.array(z.string()).optional().describe('Filter: memory must have every one of these tags'),
+      minutes: z.number().optional().describe(
+        `How long the claim lasts, in whole minutes (default ${CLAIM_DEFAULT_MINUTES})`,
+      ),
+      indefinite: z.boolean().optional().describe('Claim with no end, until released (not with minutes)'),
+      ...sessionShape,
+    }),
+  }, handleClaimNext(store));
+
   server.registerTool('release_claim', {
     description:
-      "Release your claim on a memory when the work is done or parked. Releasing another member's claim needs force. Returns whether an active claim was released.",
+      'Release your claim on a memory when the work is done or parked. Pass the same session you claimed with: releasing a claim held by another member, or by another session of yours, needs force. Returns whether an active claim was released.',
     inputSchema: z.object({
       memory_id: z.string().describe('ID of the claimed memory'),
-      force: z.boolean().optional().describe("Release another member's claim"),
+      force: z.boolean().optional().describe('Release a claim held by another member or session'),
+      ...sessionShape,
     }),
   }, handleRelease(store));
 

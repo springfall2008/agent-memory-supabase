@@ -47,6 +47,12 @@ export const NEIGHBOURS_MAX_RESULTS = 100;
 /** `neighbours` with detail 'short' returns this many characters of each memory's content. */
 export const NEIGHBOUR_SNIPPET_CHARS = 160;
 
+/** graph: at most this many short nodes (a 160-character snippet each) per call. */
+export const GRAPH_MAX_NODES = 400;
+/** graph with detail 'full': a memory can hold 20,000 characters, so full content is capped like a ranked read. */
+export const GRAPH_FULL_MAX_NODES = MAX_LIMIT;
+export const GRAPH_SNIPPET_CHARS = 160;
+
 /** The first `max` characters of `text`, with an ellipsis only when something was cut. */
 export function snippet(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + '…' : text;

@@ -46,11 +46,11 @@ It is not a knowledge graph, and it is not a personal assistant's memory. For on
 
 ## Tools
 
-The server exposes 28 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
+The server exposes 30 tools, plus 13 `admin_` tools that only admins see (see [Admins](#admins)). Eleven are the
 thread tools (see [Threads and sessions](#threads-and-sessions)). The memory tools are `list_scopes`, `store`, `store_batch`, `search`, `recall`, `find_related`,
-`list_recent`, `update`, `delete`, `stats` and `prune`, plus the three link tools `relate_memories`, `unrelate_memories`
-and `neighbours` (see [Memory links](#memory-links)), and the three claim tools `claim_memory`, `release_claim` and
-`my_claims` (see [Claims](#claims)). They match the original server, plus a `scope` argument on the write tools, and the
+`list_recent`, `update`, `delete`, `stats` and `prune`, plus the four link tools `relate_memories`, `unrelate_memories`,
+`neighbours` and `graph` (see [Memory links](#memory-links)), and the four claim tools `claim_memory`, `claim_next`,
+`release_claim` and `my_claims` (see [Claims](#claims)). They match the original server, plus a `scope` argument on the write tools, and the
 link and claim tools. Search is hybrid (BM25 full-text plus `gte-small` vector similarity, fused with RRF) with temporal decay.
 Its `tags` filter keeps memories with at least one of the tags given; `tags_all` keeps only those with every one, so a
 query such as "open work in this repo" (`tags_all: ["repo:<name>", "status:open"]`) needs no client-side filtering.
@@ -78,6 +78,13 @@ direction and type, up to 100 memories, each with the path that reached it; `det
 `recall`, `find_related` and `list_recent` results show each memory's links (up to 10, plus a `moreLinks` count), and a
 memory that a newer one `supersedes` is flagged `superseded: true`; it is flagged, not ranked lower.
 
+`graph` reads a whole project at once: it takes the search filters (`tags` or `tags_all` is required, for example
+`tags_all: ["cairn:<project>"]`) and returns the matching memories as `nodes`, oldest first, and every link between them
+as `edges` (`{from, to, type}`). Each node has its id, scope, category, tags, `createdAt`, a 160-character snippet,
+`superseded` and any active `claim`; `detail: "full"` gives the whole content instead. It returns up to 400 nodes, or
+100 with `detail: "full"`, with `total` and `truncated`; links to memories outside the set are left out. Unlike
+`neighbours`, it also finds memories not yet linked to anything. It does not count as an access.
+
 You need read access to both memories. `supersedes` needs write access to both scopes; `derived-from` and `depends-on`
 need write access to the `from` memory's scope; `relates-to` needs write access to either. Removing a link needs write
 access to either end's scope. A link is visible only to someone who can read both ends, so it never reveals a memory you
@@ -91,15 +98,19 @@ work is taken before starting it. `claim_memory` takes the memory, a short reaso
 `recall`, `find_related`, `list_recent`, browse and `neighbours` show a claimed memory's `claim`: who holds it, until
 when and why.
 
-A claim belongs to a **member**. Claiming a memory you already hold renews it, from any of your sessions; the session
-that made or last renewed the claim is recorded and shown only to you, in `my_claims` and as `claim.session`, so you can
-spot claims left by stale sessions (a renewal from a different session reports `previousSession`). Claiming a memory
-another member holds fails and says who holds it; `force: true` takes it over. `release_claim` removes your claim, or
-someone else's with `force`. `my_claims` lists your active claims, soonest end first.
+A claim belongs to a **member and a session** together. Claiming again from the same session renews it. A claim held
+by another member, or by another session of your own member, fails and says who holds it, until when and why;
+`force: true` takes it over, and the result's `overridden` reports the claim it replaced (with its session when it was
+your own). A claim made without a session can be renewed only by another call without one, so give every agent its own
+session label and pass it to `claim_memory`, `claim_next` and `release_claim` alike. A new label creates the session.
+The session is shown only to its member, in `my_claims` and as `claim.session`, so you can spot claims left by stale
+sessions. `release_claim` removes your session's claim, or anyone else's with `force`. `my_claims` lists your member's
+active claims across all its sessions, soonest end first.
 
-Because a claim belongs to the member, agents that share one token count as one holder: the second agent's claim succeeds
-as a renewal. Give each agent its own session label, compare `claim.session` with your own before claiming, and treat
-a returned `previousSession` as "another session of this member was on it".
+`claim_next` takes work from a queue: it claims the oldest memory matching the filters (`tags` or `tags_all` is
+required) that nobody holds, that you can write and that is not superseded, and returns it in full, or
+`claimed: false` when nothing is free. It never waits: a memory another caller is claiming at that moment is skipped,
+so parallel workers get different memories.
 
 Claiming and releasing need write access to the memory's scope. Claims are advisory: they never stop anyone reading,
 updating or deleting the memory. An expired claim, or one whose holder has been deactivated, counts as no claim.

@@ -20,7 +20,7 @@ insert into agent_memory.agent_sessions (id, member_id, label) values
 
 select ok(not has_function_privilege('anon', 'agent_memory.claim_memory(uuid, text, int, boolean, boolean, uuid)', 'execute'),
   'anon cannot execute claim_memory');
-select ok(not has_function_privilege('anon', 'agent_memory.release_claim(uuid, boolean)', 'execute'),
+select ok(not has_function_privilege('anon', 'agent_memory.release_claim(uuid, boolean, uuid)', 'execute'),
   'anon cannot execute release_claim');
 
 -- Validation and access
@@ -59,12 +59,13 @@ select throws_like($$select * from agent_memory.claim_memory('aaaaaaaa-0000-0000
 reset role;
 select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
 set local role agent_memory_member;
-select is((select previous_session_label from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'second pass', 60, false, false, '51111111-0000-0000-0000-00000000000b'::uuid)), 'w-a',
-  'a renewal from another session reports the previous one');
-select is((select session_id from agent_memory.memory_claims where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'), '51111111-0000-0000-0000-00000000000b'::uuid, 'the latest session is recorded');
-select is((select previous_session_label from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'third pass', 30, false, false, null)), 'w-b',
-  'a renewal with no session still reports the previous one');
-select ok((select session_id is null from agent_memory.memory_claims where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'), 'and records no session');
+select throws_like($$select * from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'second pass', 60, false, false, '51111111-0000-0000-0000-00000000000b'::uuid)$$,
+  'Memory aaaaaaaa-0000-0000-0000-000000000001 is claimed by your session ''w-a'' until %: fixing the parser', 'another session of the same member is refused');
+select is((select overridden_session_label from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'second pass', 60, false, true, '51111111-0000-0000-0000-00000000000b'::uuid)), 'w-a',
+  'force over an own other session reports it');
+select ok((select overridden_by is null from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'third pass', 30, false, false, '51111111-0000-0000-0000-00000000000b'::uuid)),
+  'the same session renews');
+select is((select session_id from agent_memory.memory_claims where memory_id = 'aaaaaaaa-0000-0000-0000-000000000001'), '51111111-0000-0000-0000-00000000000b'::uuid, 'the renewing session is recorded');
 reset role;
 select set_config('agent_memory.member_id', '22222222-2222-2222-2222-222222222222', true);
 set local role agent_memory_member;
@@ -122,14 +123,14 @@ insert into agent_memory.scope_grants (scope_id, member_id, access) values ('a10
 -- Release
 select set_config('agent_memory.member_id', '22222222-2222-2222-2222-222222222222', true);
 set local role agent_memory_member;
-select throws_ok($$select agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', false)$$, 'P0001',
-  'Memory aaaaaaaa-0000-0000-0000-000000000002 is claimed by w; pass force to release another member''s claim', 'releasing another member''s claim needs force');
-select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', true), true, 'with force it is released');
-select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', true), false, 'releasing an unclaimed memory reports false');
+select throws_ok($$select agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', false, null)$$, 'P0001',
+  'Memory aaaaaaaa-0000-0000-0000-000000000002 is claimed by w indefinitely: long ticket; pass force to release it', 'releasing another member''s claim needs force');
+select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', true, null), true, 'with force it is released');
+select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', true, null), false, 'releasing an unclaimed memory reports false');
 reset role;
 select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
 set local role agent_memory_member;
-select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000001', false), true, 'the holder releases their own claim');
+select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000001', false, null), true, 'the holder releases their own claim');
 select lives_ok($$select * from agent_memory.claim_memory('aaaaaaaa-0000-0000-0000-000000000001', 'visible claim', 60, false, false, null)$$, 'w claims m1 again');
 reset role;
 

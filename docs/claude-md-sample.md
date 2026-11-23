@@ -84,11 +84,15 @@ A memory flagged `superseded: true` has been replaced; follow its `supersedes` l
 
 Before starting work that another agent could also pick up, claim its status memory with `claim_memory`: give a short
 reason, pass your session label, and either `minutes` for how long you expect to need or `indefinite: true` for work
-that may pause for days. If the memory is already claimed, someone else is on it: pick something else, or ask before
-using `force`. Release the claim with `release_claim` when the work is done or parked. A memory in search results with a
-`claim` is taken. `claim.mine` means your member holds it, which includes other agents sharing your token: check that
-`claim.session` is your own session before treating it as yours, and if `claim_memory` returns `previousSession`,
-another session of your member was working on it.
+that may pause for days. A claim belongs to your member and session together, so another session of yours is refused
+just like another member. If the memory is already claimed, someone else is on it: pick something else, or ask before
+using `force`. Release the claim with `release_claim`, passing the same session label, when the work is done or parked.
+A memory in search results with a `claim` is taken; `claim.mine` means your member holds it, and `claim.session` says
+which of your sessions. To take the next item from a queue of open work, use `claim_next` with `tags_all` (for example
+`["kind:intent", "status:open"]`): it claims the oldest free one for you, or returns `claimed: false`.
+
+To see a whole project at once, call `graph` with its tag: it returns every matching memory and every link between
+them in one call.
 
 ### Threads
 

@@ -2,7 +2,9 @@ import { assert, assertEquals, assertStringIncludes, assertThrows } from '@std/a
 import { McpServer } from 'npm:@modelcontextprotocol/server@2.4.0';
 import {
   handleClaim,
+  handleClaimNext,
   handleFindRelated,
+  handleGraph,
   handleListRecent,
   handleMyClaims,
   handleNeighbours,
@@ -89,6 +91,10 @@ function mockStore(
       rec('unrelate', from, to, type);
       return Promise.resolve(opts.unrelated ?? true);
     },
+    graph: (f) => {
+      rec('graph', f);
+      return Promise.resolve({ nodes: [], edges: [], truncated: false, total: 0 });
+    },
     neighbours: (id, o) => {
       rec('neighbours', id, o);
       return Promise.resolve({ neighbours: opts.neighbours ?? [], truncated: opts.truncated ?? false });
@@ -98,13 +104,17 @@ function mockStore(
       if (opts.claimError) return Promise.reject(opts.claimError);
       return Promise.resolve({ claimed: true as const, until: '2026-01-01T01:00:00.000Z' });
     },
-    release: (id, force) => {
-      rec('release', id, force);
+    release: (id, force, s) => {
+      rec('release', id, force, s);
       return Promise.resolve(opts.released ?? true);
     },
     myClaims: (scopes) => {
       rec('myClaims', scopes);
       return Promise.resolve(opts.myClaims ?? []);
+    },
+    claimNext: (f, description, o, s) => {
+      rec('claimNext', f, description, o, s);
+      return Promise.resolve({ claimed: false as const });
     },
     findRelated: (id, limit, scopes) => {
       rec('findRelated', id, limit, scopes);
@@ -321,7 +331,7 @@ Deno.test('handleUpdate with only tags passes only tags', async () => {
   assertEquals(Object.keys(calls.update[0][1]), ['tags']);
 });
 
-Deno.test('registerTools registers exactly 17 tools', () => {
+Deno.test('registerTools registers exactly 19 tools', () => {
   const { store } = mockStore();
   const { embedder } = mockEmbedder();
   const server = new McpServer({ name: 'test', version: '0.0.0' });
@@ -331,8 +341,10 @@ Deno.test('registerTools registers exactly 17 tools', () => {
     Object.keys(registered).sort(),
     [
       'claim_memory',
+      'claim_next',
       'delete',
       'find_related',
+      'graph',
       'list_recent',
       'list_scopes',
       'my_claims',
@@ -558,8 +570,14 @@ Deno.test('handleClaim with a store error is an isError result prefixed Claim fa
 Deno.test('handleRelease passes force and returns released', async () => {
   const { store, calls } = mockStore({ released: false });
   const r = await handleRelease(store)({ memory_id: 'm', force: true });
-  assertEquals(calls.release[0], ['m', true]);
+  assertEquals(calls.release[0], ['m', true, undefined]);
   assertEquals(JSON.parse(r.content[0].text), { released: false });
+});
+
+Deno.test('handleRelease passes the session', async () => {
+  const { store, calls } = mockStore();
+  await handleRelease(store)({ memory_id: 'm', session_label: 'x' });
+  assertEquals(calls.release[0], ['m', false, { sessionLabel: 'x' }]);
 });
 
 Deno.test('handleMyClaims returns count and claims, and an empty scopes array means all', async () => {
@@ -585,11 +603,74 @@ Deno.test('the claim tools validate their arguments and describe the rules', () 
   })._registeredTools;
   assertThrows(() => registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', force: 'yes' }));
   registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', indefinite: true, session_label: 's' });
-  registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true });
+  registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true, session_label: 's' });
   registered.my_claims.inputSchema.parse({ scopes: ['s'] });
   const d = registered.claim_memory.description ?? '';
-  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force', 'share a token', 'previousSession']) {
+  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force', 'member and session', 'session']) {
     assertStringIncludes(d, phrase);
   }
+  for (const stale of ['share a token', 'previousSession']) assertEquals(d.includes(stale), false);
+  assertStringIncludes(registered.release_claim.description ?? '', 'same session');
   for (const tool of ['search', 'recall']) assertStringIncludes(registered[tool].description ?? '', 'claim');
+});
+
+Deno.test('handleClaimNext maps tags_all, the options and the session', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleClaimNext(store)({
+    description: 'exploring',
+    tags_all: ['kind:intent', 'status:open'],
+    scopes: [],
+    category: 'other',
+    minutes: 30,
+    session_label: 'worker-1',
+  });
+  const [f, description, o, s] = calls.claimNext[0];
+  assertEquals(f, { scopes: undefined, category: 'other', tags: undefined, tagsAll: ['kind:intent', 'status:open'] });
+  assertEquals(description, 'exploring');
+  assertEquals(o, { minutes: 30, indefinite: undefined });
+  assertEquals(s, { sessionLabel: 'worker-1' });
+  assertEquals(JSON.parse(r.content[0].text), { claimed: false });
+});
+
+Deno.test('the claim_next description says oldest, free, and tags or tags_all', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, { description?: string; inputSchema: { parse: (v: unknown) => unknown } }>;
+  })._registeredTools;
+  const d = registered.claim_next.description ?? '';
+  for (const phrase of ['oldest', 'nobody', 'superseded', 'tags_all', 'claimed: false', 'wait']) {
+    assertStringIncludes(d, phrase);
+  }
+  registered.claim_next.inputSchema.parse({ description: 'x', tags: ['t'], indefinite: true, session_label: 's' });
+  assertThrows(() => registered.claim_next.inputSchema.parse({ tags: ['t'] }));
+});
+
+Deno.test('handleGraph maps tags_all and detail and returns the graph', async () => {
+  const { store, calls } = mockStore();
+  const r = await handleGraph(store)({ tags_all: ['cairn:p1'], scopes: [], detail: 'full' });
+  assertEquals(calls.graph[0][0], {
+    scopes: undefined,
+    category: undefined,
+    tags: undefined,
+    tagsAll: ['cairn:p1'],
+    detail: 'full',
+  });
+  assertEquals(JSON.parse(r.content[0].text), { nodes: [], edges: [], truncated: false, total: 0 });
+});
+
+Deno.test('the graph tool describes nodes, edges and its caps', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, { description?: string; inputSchema: { parse: (v: unknown) => unknown } }>;
+  })._registeredTools;
+  const d = registered.graph.description ?? '';
+  for (const phrase of ['nodes', 'edges', '400', '100', 'tags_all', 'truncated']) assertStringIncludes(d, phrase);
+  registered.graph.inputSchema.parse({ tags: ['t'], detail: 'short' });
+  assertThrows(() => registered.graph.inputSchema.parse({ tags: ['t'], detail: 'huge' }));
 });

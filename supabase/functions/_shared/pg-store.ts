@@ -13,6 +13,9 @@ import {
   CLAIM_DESCRIPTION_MAX,
   CLAIM_SNIPPET_CHARS,
   DEFAULT_LIMIT,
+  GRAPH_FULL_MAX_NODES,
+  GRAPH_MAX_NODES,
+  GRAPH_SNIPPET_CHARS,
   LINKS_SHOWN_MAX,
   MY_CLAIMS_MAX,
   NEIGHBOURS_DEFAULT_DEPTH,
@@ -28,9 +31,15 @@ import { LINK_TYPES } from './types.ts';
 import type {
   BrowseFilters,
   BrowsePage,
+  ClaimNextFilters,
+  ClaimNextResult,
   ClaimOptions,
   ClaimResult,
   Embedder,
+  GraphEdge,
+  GraphFilters,
+  GraphNode,
+  GraphResult,
   LinkDirection,
   LinkType,
   Memory,
@@ -60,6 +69,18 @@ const MS_PER_DAY = 86_400_000;
 type Row = Record<string, any>;
 
 const iso = (v: Date | string): string => (v instanceof Date ? v.toISOString() : new Date(v).toISOString());
+
+/** Validates a claim's description and duration as the SQL does; minutes is null for an indefinite claim. */
+function claimArgs(description: string, o: { minutes?: number; indefinite?: boolean }) {
+  const desc = description.trim();
+  if (desc.length < 1 || desc.length > CLAIM_DESCRIPTION_MAX) {
+    throw new StoreError(`Description must be 1-${CLAIM_DESCRIPTION_MAX} characters`);
+  }
+  if (o.indefinite && o.minutes !== undefined) throw new StoreError('Pass minutes or indefinite, not both');
+  const minutes = o.indefinite ? null : o.minutes ?? CLAIM_DEFAULT_MINUTES;
+  if (minutes !== null) checkClaimMinutes(minutes);
+  return { desc, minutes };
+}
 
 export function rowToMemory(r: Row): Memory {
   const m: Memory = {
@@ -188,7 +209,7 @@ export class PgMemoryStore implements MemoryStore {
    * Adds the active claim, if any, to each memory: holder, end and description, plus `mine` and the session only when
    * the caller holds it. One query for the whole set, never one per memory. Memories with no active claim gain no key.
    */
-  private async addClaims(tx: Tx, memories: Memory[]): Promise<void> {
+  private async addClaims(tx: Tx, memories: { id: string; claim?: MemoryClaim }[]): Promise<void> {
     if (memories.length === 0) return;
     const ids = [...new Set(memories.map((m) => m.id))];
     const rows = await tx<Row[]>`select * from agent_memory.memory_claims_for(${ids}::uuid[])`;
@@ -562,16 +583,63 @@ export class PgMemoryStore implements MemoryStore {
     });
   }
 
-  /** Claim a memory, renewing the caller's own claim; see the SQL function claim_memory for the rules. */
+  /**
+   * A project's graph: every readable memory matching the filters, oldest first (capped by detail), and every visible
+   * link between them. The links policy hides any link whose other end is unreadable or soft-deleted. No access-count
+   * bump and no decay, as for browse.
+   */
+  async graph(f: GraphFilters): Promise<GraphResult> {
+    if (!f.tags?.length && !f.tagsAll?.length) throw new StoreError('Pass tags or tags_all');
+    const full = f.detail === 'full';
+    const cap = full ? GRAPH_FULL_MAX_NODES : GRAPH_MAX_NODES;
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, f.scopes);
+      if (scopeIds.length === 0) return { nodes: [], edges: [], truncated: false, total: 0 };
+      const rows = await tx<Row[]>`
+        select id, scope, category, tags, content, created_at, count(*) over () as total
+        from agent_memory.memory_view
+        where scope_id = any(${scopeIds}::uuid[])
+          and (${f.category ?? null}::text is null or category = ${f.category ?? null}::text)
+          and (${f.tags?.length ? tx.array(f.tags) : null}::text[] is null
+               or tags && ${f.tags?.length ? tx.array(f.tags) : null}::text[])
+          and (${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[] is null
+               or tags @> ${f.tagsAll?.length ? tx.array(f.tagsAll) : null}::text[])
+        order by created_at, id
+        limit ${cap}`;
+      const total = rows.length ? Number(rows[0].total) : 0;
+      const nodes: GraphNode[] = rows.map((r) => {
+        const n: GraphNode = {
+          id: r.id,
+          scope: r.scope,
+          category: r.category as MemoryCategory,
+          tags: r.tags,
+          createdAt: iso(r.created_at),
+        };
+        if (full) n.content = r.content;
+        else n.snippet = snippet(r.content, GRAPH_SNIPPET_CHARS);
+        return n;
+      });
+      if (nodes.length === 0) return { nodes, edges: [], truncated: false, total };
+      const ids = nodes.map((n) => n.id);
+      const linkRows = await tx<Row[]>`
+        select from_id, to_id, type from agent_memory.memory_links
+        where from_id = any(${ids}::uuid[]) and to_id = any(${ids}::uuid[])
+        order by created_at, from_id, to_id, type`;
+      const edges: GraphEdge[] = linkRows.map((r) => ({ from: r.from_id, to: r.to_id, type: r.type as LinkType }));
+      const replaced = await tx<Row[]>`
+        select distinct to_id from agent_memory.memory_links
+        where type = 'supersedes' and to_id = any(${ids}::uuid[])`;
+      const superseded = new Set(replaced.map((r) => r.to_id as string));
+      for (const n of nodes) if (superseded.has(n.id)) n.superseded = true;
+      await this.addClaims(tx, nodes);
+      return { nodes, edges, truncated: total > nodes.length, total };
+    });
+  }
+
+  /** Claim a memory, renewing the caller's own member-and-session claim; see the SQL function claim_memory. */
   async claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult> {
     if (!isUuid(id)) throw notFoundMemory(id);
-    const desc = description.trim();
-    if (desc.length < 1 || desc.length > CLAIM_DESCRIPTION_MAX) {
-      throw new StoreError(`Description must be 1-${CLAIM_DESCRIPTION_MAX} characters`);
-    }
-    if (o.indefinite && o.minutes !== undefined) throw new StoreError('Pass minutes or indefinite, not both');
-    const minutes = o.indefinite ? null : o.minutes ?? CLAIM_DEFAULT_MINUTES;
-    if (minutes !== null) checkClaimMinutes(minutes);
+    const { desc, minutes } = claimArgs(description, o);
     return await this.run(async (tx) => {
       const sessionId = await this.resolveSession(tx, s, true);
       const [r] = await tx<Row[]>`
@@ -584,19 +652,54 @@ export class PgMemoryStore implements MemoryStore {
           until: r.overridden_until ? iso(r.overridden_until) : null,
           description: r.overridden_description,
         };
-      }
-      if (r.previous_session_id != null) {
-        result.previousSession = { id: r.previous_session_id, label: r.previous_session_label ?? null };
+        if (r.overridden_session_id != null) {
+          result.overridden.session = { id: r.overridden_session_id, label: r.overridden_session_label ?? null };
+        }
       }
       return result;
     });
   }
 
-  async release(id: string, force = false): Promise<boolean> {
+  /** Release a claim held by the caller's member and session (none matches only none); others need force. */
+  async release(id: string, force = false, s?: SessionRef): Promise<boolean> {
     if (!isUuid(id)) throw notFoundMemory(id);
     return await this.run(async (tx) => {
-      const [r] = await tx<Row[]>`select agent_memory.release_claim(${id}::uuid, ${force}::boolean) as released`;
+      // A named session that does not resolve raises Session not found here; it never becomes "no session".
+      const sessionId = await this.resolveSession(tx, s, false);
+      const [r] = await tx<Row[]>`
+        select agent_memory.release_claim(${id}::uuid, ${force}::boolean, ${sessionId}::uuid) as released`;
       return r.released === true;
+    });
+  }
+
+  /**
+   * Claim the oldest matching memory nobody holds (see the SQL function claim_next) and return it in full, or
+   * `{ claimed: false }` when none is free. A new session label creates the session, as `claim` does.
+   */
+  async claimNext(
+    f: ClaimNextFilters,
+    description: string,
+    o: { minutes?: number; indefinite?: boolean },
+    s?: SessionRef,
+  ): Promise<ClaimNextResult> {
+    if (!f.tags?.length && !f.tagsAll?.length) throw new StoreError('Pass tags or tags_all');
+    const { desc, minutes } = claimArgs(description, o);
+    return await this.run(async (tx) => {
+      const scopeIds = await this.resolveScopeIds(tx, f.scopes);
+      if (scopeIds.length === 0) return { claimed: false };
+      const sessionId = await this.resolveSession(tx, s, true);
+      const [r] = await tx<Row[]>`
+        select * from agent_memory.claim_next(${scopeIds}::uuid[], ${f.category ?? null}::text,
+          ${f.tags?.length ? tx.array(f.tags) : null}::text[], ${
+        f.tagsAll?.length ? tx.array(f.tagsAll) : null
+      }::text[],
+          ${desc}::text, ${minutes}::int, ${o.indefinite === true}::boolean, ${sessionId}::uuid)`;
+      if (!r) return { claimed: false };
+      const [row] = await tx<Row[]>`select * from agent_memory.memory_view where id = ${r.memory_id}::uuid`;
+      const memory = rowToMemory(row);
+      await this.addLinks(tx, [memory]);
+      await this.addClaims(tx, [memory]);
+      return { claimed: true, until: r.expires_at ? iso(r.expires_at) : null, memory };
     });
   }
 

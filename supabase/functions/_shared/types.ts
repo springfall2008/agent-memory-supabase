@@ -71,11 +71,19 @@ export interface ClaimOptions {
 export interface ClaimResult {
   claimed: true;
   until: string | null;
-  /** The other member's claim that `force` replaced. */
-  overridden?: { by: string; until: string | null; description: string };
-  /** The session recorded before, when the same member renewed from a different session. */
-  previousSession?: ClaimSession;
+  /** The claim that `force` replaced; `session` only when it was another session of the caller's own member. */
+  overridden?: { by: string; until: string | null; description: string; session?: ClaimSession };
 }
+
+/** Which memories claim_next may take: the search filters without dates (tags or tagsAll is required). */
+export interface ClaimNextFilters {
+  scopes?: string[];
+  category?: MemoryCategory;
+  tags?: string[];
+  tagsAll?: string[];
+}
+
+export type ClaimNextResult = { claimed: true; until: string | null; memory: Memory } | { claimed: false };
 
 export interface MyClaim {
   memory: { id: string; scope: string; category: MemoryCategory; tags: string[]; snippet: string };
@@ -97,6 +105,42 @@ export interface MemoryLink {
   direction: LinkDirection;
   /** The memory at the other end (for a walk step: the memory that step reached). */
   memoryId: string;
+}
+
+/** Which memories graph returns: the search filters without dates (tags or tagsAll is required). */
+export interface GraphFilters {
+  scopes?: string[];
+  category?: MemoryCategory;
+  tags?: string[];
+  tagsAll?: string[];
+  /** 'short' (default): a snippet per node; 'full': the whole content, with a lower node cap. */
+  detail?: 'short' | 'full';
+}
+
+export interface GraphNode {
+  id: string;
+  scope: string;
+  category: MemoryCategory;
+  tags: string[];
+  createdAt: string;
+  snippet?: string;
+  content?: string;
+  superseded?: true;
+  claim?: MemoryClaim;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  type: LinkType;
+}
+
+export interface GraphResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  /** True when more memories matched than were returned (`total` counts them all). */
+  truncated: boolean;
+  total: number;
 }
 
 export interface NeighbourOptions {
@@ -213,9 +257,16 @@ export interface MemoryStore {
   relate(from: string, to: string, type: LinkType): Promise<void>;
   unrelate(from: string, to: string, type: LinkType): Promise<boolean>;
   neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult>;
+  graph(f: GraphFilters): Promise<GraphResult>;
   claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult>;
-  release(id: string, force?: boolean): Promise<boolean>;
+  release(id: string, force?: boolean, s?: SessionRef): Promise<boolean>;
   myClaims(scopes?: string[]): Promise<MyClaim[]>;
+  claimNext(
+    f: ClaimNextFilters,
+    description: string,
+    o: { minutes?: number; indefinite?: boolean },
+    s?: SessionRef,
+  ): Promise<ClaimNextResult>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;
   delete(id: string): Promise<void>;
