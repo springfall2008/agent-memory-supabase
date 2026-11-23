@@ -115,6 +115,38 @@ so parallel workers get different memories.
 Claiming and releasing need write access to the memory's scope. Claims are advisory: they never stop anyone reading,
 updating or deleting the memory. An expired claim, or one whose holder has been deactivated, counts as no claim.
 
+## Blackboard skill
+
+[`skills/blackboard/`](skills/blackboard/) is a Claude Code skill, made of instructions only, that lets several
+sessions pursue one shared goal through this server. They can run on any model, in any terminal. A board is a set of
+memories tagged `board:<project>`: a goal, rules, progress, intents (work to do), facts (results), hints, and a
+conclusion. One session leads, writing intents and deciding when the goal is met. Workers take intents with
+`claim_next`, do them, and record one fact each. Sessions never message each other.
+
+Install it once, from a main checkout:
+
+```sh
+ln -s "$PWD/skills/blackboard" ~/.claude/skills/blackboard
+```
+
+| Command | Does |
+|---------|------|
+| `/blackboard start <project>` | Sets up a board with you: goal, a checkable "done when", scope, and rules you approve |
+| `/blackboard lead <project>` | One lead round: read the board, then write intents, correct facts, or conclude |
+| `/blackboard lead <project> takeover` | Takes over the lead from a session you know is dead |
+| `/blackboard work <project>` | One work cycle: claim an intent, do it, record a fact |
+| `/blackboard hint <project> <text>` | Adds advice for the lead |
+| `/blackboard status <project>` | Shows where the run stands (read-only) |
+| `/blackboard stop <project>` | Stops every lead and worker at its next step |
+
+Run the lead and the workers under `/loop`. Start `/loop /blackboard lead <project>` in one session and
+`/loop /blackboard work <project>` in as many others as you like, for example a second terminal on a different model.
+
+What a board needs that is specific to its goal, such as how to measure or what workers may touch, lives in its rules
+memory. Workers never push, merge or deploy unless those rules allow it. The board's scope decides who can read it, so
+a board in a public-safe scope must hold only public-safe facts. The design is in
+`docs/superpowers/specs/2026-11-23-blackboard-skill-design.md`.
+
 ## Threads and sessions
 
 Memories hold what is known; **threads** hold the discussion around it. A thread lives in one scope, has a title and
