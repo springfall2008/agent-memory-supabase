@@ -562,7 +562,7 @@ export class PgMemoryStore implements MemoryStore {
     });
   }
 
-  /** Claim a memory, renewing the caller's own claim; see the SQL function claim_memory for the rules. */
+  /** Claim a memory, renewing the caller's own member-and-session claim; see the SQL function claim_memory. */
   async claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult> {
     if (!isUuid(id)) throw notFoundMemory(id);
     const desc = description.trim();
@@ -584,18 +584,22 @@ export class PgMemoryStore implements MemoryStore {
           until: r.overridden_until ? iso(r.overridden_until) : null,
           description: r.overridden_description,
         };
-      }
-      if (r.previous_session_id != null) {
-        result.previousSession = { id: r.previous_session_id, label: r.previous_session_label ?? null };
+        if (r.overridden_session_id != null) {
+          result.overridden.session = { id: r.overridden_session_id, label: r.overridden_session_label ?? null };
+        }
       }
       return result;
     });
   }
 
-  async release(id: string, force = false): Promise<boolean> {
+  /** Release a claim held by the caller's member and session (none matches only none); others need force. */
+  async release(id: string, force = false, s?: SessionRef): Promise<boolean> {
     if (!isUuid(id)) throw notFoundMemory(id);
     return await this.run(async (tx) => {
-      const [r] = await tx<Row[]>`select agent_memory.release_claim(${id}::uuid, ${force}::boolean) as released`;
+      // A named session that does not resolve raises Session not found here; it never becomes "no session".
+      const sessionId = await this.resolveSession(tx, s, false);
+      const [r] = await tx<Row[]>`
+        select agent_memory.release_claim(${id}::uuid, ${force}::boolean, ${sessionId}::uuid) as released`;
       return r.released === true;
     });
   }

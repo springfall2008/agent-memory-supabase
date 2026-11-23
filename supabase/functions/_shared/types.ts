@@ -71,10 +71,8 @@ export interface ClaimOptions {
 export interface ClaimResult {
   claimed: true;
   until: string | null;
-  /** The other member's claim that `force` replaced. */
-  overridden?: { by: string; until: string | null; description: string };
-  /** The session recorded before, when the same member renewed from a different session. */
-  previousSession?: ClaimSession;
+  /** The claim that `force` replaced; `session` only when it was another session of the caller's own member. */
+  overridden?: { by: string; until: string | null; description: string; session?: ClaimSession };
 }
 
 export interface MyClaim {
@@ -214,7 +212,7 @@ export interface MemoryStore {
   unrelate(from: string, to: string, type: LinkType): Promise<boolean>;
   neighbours(id: string, o: NeighbourOptions): Promise<NeighboursResult>;
   claim(id: string, description: string, o: ClaimOptions, s?: SessionRef): Promise<ClaimResult>;
-  release(id: string, force?: boolean): Promise<boolean>;
+  release(id: string, force?: boolean, s?: SessionRef): Promise<boolean>;
   myClaims(scopes?: string[]): Promise<MyClaim[]>;
   listRecent(limit: number, category?: MemoryCategory, scopes?: string[]): Promise<Memory[]>;
   update(id: string, u: UpdateRequest, s?: SessionRef): Promise<Memory>;

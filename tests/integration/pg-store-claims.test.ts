@@ -53,16 +53,63 @@ Deno.test('claim then a second member is refused, and force takes over', () =>
     await assertRejects(() => rw.claim(m.id, 'back again', {}), Error, `is claimed by ${w.bw.name} until`);
   }));
 
-Deno.test('renewal from another session reports previousSession', () =>
+Deno.test('a claim held by one session refuses another session of the same member', () =>
   withWorld(async (w, _a, mk) => {
     const [rw] = mk(w.rw.id);
     const m = await rw.store(w.alpha.name, req('a ticket'));
     await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
-    const again = await rw.claim(m.id, 'second look', {}, { sessionLabel: 's-b' });
-    assertEquals(again.previousSession?.label, 's-a');
-    assertEquals(typeof again.previousSession?.id, 'string');
-    const same = await rw.claim(m.id, 'third look', {}, { sessionLabel: 's-b' });
-    assertEquals(same.previousSession, undefined);
+    await assertRejects(
+      () => rw.claim(m.id, 'second look', {}, { sessionLabel: 's-b' }),
+      Error,
+      "is claimed by your session 's-a' until",
+    );
+    await assertRejects(() => rw.claim(m.id, 'no session', {}), Error, "is claimed by your session 's-a' until");
+    const same = await rw.claim(m.id, 'third look', {}, { sessionLabel: 's-a' });
+    assertEquals(same.overridden, undefined);
+  }));
+
+Deno.test('force over an own other session reports it', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
+    const forced = await rw.claim(m.id, 'taking over', { force: true }, { sessionLabel: 's-b' });
+    assertEquals(forced.overridden?.by, w.rw.name);
+    assertEquals(forced.overridden?.session?.label, 's-a');
+    assertEquals(typeof forced.overridden?.session?.id, 'string');
+    assertEquals('previousSession' in forced, false);
+  }));
+
+Deno.test('another member forcing never sees the holder session', () =>
+  withWorld(async (w, admin, mk) => {
+    const { rw, bw } = await contenders(w, admin, mk);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'mine', {}, { sessionLabel: 's-a' });
+    const forced = await bw.claim(m.id, 'taking over', { force: true });
+    assertEquals(forced.overridden?.by, w.rw.name);
+    assertEquals(forced.overridden?.session, undefined);
+  }));
+
+Deno.test('release with an unknown session label is Session not found and keeps the claim', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    await rw.claim(m.id, 'no session claim', {});
+    await assertRejects(() => rw.release(m.id, false, { sessionLabel: 'never-made' }), Error, 'Session not found');
+    assertEquals((await rw.myClaims()).map((c) => c.memory.id), [m.id]);
+  }));
+
+Deno.test('release by another session needs force; the holding session releases', () =>
+  withWorld(async (w, _a, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('a ticket'));
+    const n = await rw.store(w.alpha.name, req('another ticket'));
+    await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
+    await rw.claim(n.id, 'n look', {}, { sessionLabel: 's-b' });
+    await assertRejects(() => rw.release(m.id, false, { sessionLabel: 's-b' }), Error, 'pass force to release it');
+    await assertRejects(() => rw.release(m.id), Error, 'pass force to release it');
+    assertEquals(await rw.release(m.id, true, { sessionLabel: 's-b' }), true);
+    assertEquals(await rw.release(n.id, false, { sessionLabel: 's-b' }), true);
   }));
 
 Deno.test('minutes defaults to 60 and indefinite has no end', () =>

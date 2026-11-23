@@ -98,8 +98,8 @@ function mockStore(
       if (opts.claimError) return Promise.reject(opts.claimError);
       return Promise.resolve({ claimed: true as const, until: '2026-01-01T01:00:00.000Z' });
     },
-    release: (id, force) => {
-      rec('release', id, force);
+    release: (id, force, s) => {
+      rec('release', id, force, s);
       return Promise.resolve(opts.released ?? true);
     },
     myClaims: (scopes) => {
@@ -558,8 +558,14 @@ Deno.test('handleClaim with a store error is an isError result prefixed Claim fa
 Deno.test('handleRelease passes force and returns released', async () => {
   const { store, calls } = mockStore({ released: false });
   const r = await handleRelease(store)({ memory_id: 'm', force: true });
-  assertEquals(calls.release[0], ['m', true]);
+  assertEquals(calls.release[0], ['m', true, undefined]);
   assertEquals(JSON.parse(r.content[0].text), { released: false });
+});
+
+Deno.test('handleRelease passes the session', async () => {
+  const { store, calls } = mockStore();
+  await handleRelease(store)({ memory_id: 'm', session_label: 'x' });
+  assertEquals(calls.release[0], ['m', false, { sessionLabel: 'x' }]);
 });
 
 Deno.test('handleMyClaims returns count and claims, and an empty scopes array means all', async () => {
@@ -585,11 +591,13 @@ Deno.test('the claim tools validate their arguments and describe the rules', () 
   })._registeredTools;
   assertThrows(() => registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', force: 'yes' }));
   registered.claim_memory.inputSchema.parse({ memory_id: 'a', description: 'x', indefinite: true, session_label: 's' });
-  registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true });
+  registered.release_claim.inputSchema.parse({ memory_id: 'a', force: true, session_label: 's' });
   registered.my_claims.inputSchema.parse({ scopes: ['s'] });
   const d = registered.claim_memory.description ?? '';
-  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force', 'share a token', 'previousSession']) {
+  for (const phrase of ['advisory', '60 minutes', 'indefinite', 'force', 'member and session', 'session']) {
     assertStringIncludes(d, phrase);
   }
+  for (const stale of ['share a token', 'previousSession']) assertEquals(d.includes(stale), false);
+  assertStringIncludes(registered.release_claim.description ?? '', 'same session');
   for (const tool of ['search', 'recall']) assertStringIncludes(registered[tool].description ?? '', 'claim');
 });
