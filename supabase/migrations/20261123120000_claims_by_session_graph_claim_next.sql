@@ -142,6 +142,11 @@ begin
     and agent_memory.claim_holder_active(v_old.member_id);
   if v_active and not (v_old.member_id = v_me and v_old.session_id is not distinct from p_session)
      and not coalesce(p_force, false) then
+    -- Your own other session: point at it, since the usual cause is a release that forgot its session.
+    if v_old.member_id = v_me then
+      raise exception '%; release it from that session, or pass force to release it anyway',
+        agent_memory.claim_held_message(v_old, v_me);
+    end if;
     raise exception '%; pass force to release it', agent_memory.claim_held_message(v_old, v_me);
   end if;
   delete from agent_memory.memory_claims c where c.memory_id = p_memory;

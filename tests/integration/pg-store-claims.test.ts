@@ -106,8 +106,16 @@ Deno.test('release by another session needs force; the holding session releases'
     const n = await rw.store(w.alpha.name, req('another ticket'));
     await rw.claim(m.id, 'first look', {}, { sessionLabel: 's-a' });
     await rw.claim(n.id, 'n look', {}, { sessionLabel: 's-b' });
-    await assertRejects(() => rw.release(m.id, false, { sessionLabel: 's-b' }), Error, 'pass force to release it');
-    await assertRejects(() => rw.release(m.id), Error, 'pass force to release it');
+    await assertRejects(
+      () => rw.release(m.id, false, { sessionLabel: 's-b' }),
+      Error,
+      "claimed by your session 's-a' until",
+    );
+    await assertRejects(
+      () => rw.release(m.id),
+      Error,
+      'release it from that session, or pass force to release it anyway',
+    );
     assertEquals(await rw.release(m.id, true, { sessionLabel: 's-b' }), true);
     assertEquals(await rw.release(n.id, false, { sessionLabel: 's-b' }), true);
   }));

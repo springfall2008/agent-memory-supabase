@@ -69,7 +69,7 @@ reset role;
 select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
 set local role agent_memory_member;
 select throws_like($$select agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000003', false, '51111111-0000-0000-0000-00000000000b'::uuid)$$,
-  'Memory aaaaaaaa-0000-0000-0000-000000000003 is claimed by your session ''w-a'' indefinitely: long job; pass force to release it', 'another session''s release needs force');
+  'Memory aaaaaaaa-0000-0000-0000-000000000003 is claimed by your session ''w-a'' indefinitely: long job; release it from that session, or pass force to release it anyway', 'another session''s release points to the holding session');
 select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000003', true, '51111111-0000-0000-0000-00000000000b'::uuid), true, 'with force it is released');
 select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000001', false, '51111111-0000-0000-0000-00000000000b'::uuid), true, 'the holding session releases');
 select is(agent_memory.release_claim('aaaaaaaa-0000-0000-0000-000000000002', false, null), true, 'no session releases a session-less claim');
