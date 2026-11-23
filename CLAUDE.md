@@ -95,6 +95,12 @@ filters (tags or tags_all required) oldest first, capped at `GRAPH_MAX_NODES` (4
 full content, with `count(*) over ()` as `total`, then reads `memory_links` between those ids (the links policy hides
 unreadable or deleted ends), the superseded set, and the batched claims. No decay and no `touch_accessed`.
 
+**Blackboard skill.** `skills/blackboard/` is a Claude Code skill, made of instructions only, that runs shared-goal
+boards on these tools: graph, claim_next, claims, links and search browse. It has no server code of its own. The design
+is in `docs/superpowers/specs/2026-11-23-blackboard-skill-design.md`. Test a change to it the way the plan
+`docs/superpowers/plans/2026-11-23-blackboard-skill.md` did: subagents run single cycles on a throwaway `board:toy-*`
+board in `agent-memory-tool`, and the board is deleted afterwards.
+
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in
 `_shared/limits.ts`. A 546 means the platform recycled a busy worker: retry once.

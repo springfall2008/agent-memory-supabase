@@ -20,7 +20,7 @@ async function withWorld(fn: (w: World, admin: Admin, mk: (memberId: string) => 
 }
 
 const req = (content: string, tags: string[]) => ({ content, category: 'other' as const, tags });
-const freshTag = () => `cairn:${crypto.randomUUID().slice(0, 8)}`;
+const freshTag = () => `board:${crypto.randomUUID().slice(0, 8)}`;
 
 /** Inserts n memories directly (no embedding call), oldest first, all tagged tag. */
 async function bulk(admin: Admin, w: World, tag: string, n: number, content = (i: number) => `bulk ${i}`) {

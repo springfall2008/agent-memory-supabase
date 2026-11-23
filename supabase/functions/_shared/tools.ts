@@ -589,7 +589,7 @@ export function registerTools(
   server.registerTool('graph', {
     description:
       'Read a whole project as a graph in one call: the memories matching the filters as `nodes` (id, scope, category, tags, createdAt, a short snippet, `superseded` and any active `claim`), oldest first, and every link between them as `edges` ({from, to, type}). ' +
-      `Pass tags (any) or tags_all (all), for example tags_all ["cairn:<project>"]. At most ${GRAPH_MAX_NODES} nodes, or ${GRAPH_FULL_MAX_NODES} with detail "full", which gives each node's whole content instead of a snippet; \`truncated\` says more matched and \`total\` counts them. ` +
+      `Pass tags (any) or tags_all (all), for example tags_all ["board:<project>"]. At most ${GRAPH_MAX_NODES} nodes, or ${GRAPH_FULL_MAX_NODES} with detail "full", which gives each node's whole content instead of a snippet; \`truncated\` says more matched and \`total\` counts them. ` +
       'Links to memories outside the filtered set are left out. Does not count as an access.',
     inputSchema: z.object({
       scopes: z.array(z.string()).optional().describe('Scopes to read; default all you can read'),
