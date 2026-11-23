@@ -89,8 +89,8 @@ further wake-up; in a fixed-interval `/loop`, delete its cron job.
 
 ## status
 
-This command is read-only. Call `graph` with `tags_all ["board:<project>"]`, then read the goal, the progress memory and
-any conclusion in full. Report, in this order:
+This command is read-only. Call `graph` with `tags_all ["board:<project>"]` and short detail (full returns only the
+oldest 100), then read the goal, the progress memory and any conclusion in full. Report, in this order:
 
 1. The goal, its `state:` and its Done when.
 2. The progress summary.

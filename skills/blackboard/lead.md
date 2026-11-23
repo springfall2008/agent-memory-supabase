@@ -9,7 +9,8 @@ label from SKILL.md, made once in this conversation, for every claim call.
    - If there is no goal, say so and **end the loop**.
    - If its state is not `state:running`, release your lead claim on it (`release_claim` with your `session_label`, if
      you hold one), say the board is no longer running, and **end the loop**.
-3. **Take or renew the lead role.** Call `claim_memory` on the goal with:
+3. **Take or renew the lead role,** in a separate call made after you have read step 2's result and seen
+   `state:running`. Call `claim_memory` on the goal with:
    - `minutes 30`;
    - `session_label`: your lead label;
    - `description`: `Lead of board <project>`;
