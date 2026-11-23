@@ -500,6 +500,19 @@ Deno.test('search and recall descriptions say that results carry links and a sup
   }
 });
 
+Deno.test('tool descriptions use the generic board: tag example', () => {
+  const { store } = mockStore();
+  const { embedder } = mockEmbedder();
+  const server = new McpServer({ name: 'test', version: '0.0.0' });
+  registerTools(server, store, embedder, noThreads as never);
+  const registered = (server as unknown as { _registeredTools: Record<string, { description?: string }> })
+    ._registeredTools;
+  for (const [name, t] of Object.entries(registered)) {
+    assertEquals((t.description ?? '').includes('cairn'), false, `${name} mentions cairn`);
+  }
+  assertStringIncludes(registered.graph.description ?? '', 'tags_all ["board:<project>"]');
+});
+
 Deno.test('handleNeighbours defaults to full memories and detail short swaps content for a snippet', async () => {
   const long = 'x'.repeat(300);
   const m = {
@@ -650,12 +663,12 @@ Deno.test('the claim_next description says oldest, free, and tags or tags_all', 
 
 Deno.test('handleGraph maps tags_all and detail and returns the graph', async () => {
   const { store, calls } = mockStore();
-  const r = await handleGraph(store)({ tags_all: ['cairn:p1'], scopes: [], detail: 'full' });
+  const r = await handleGraph(store)({ tags_all: ['board:p1'], scopes: [], detail: 'full' });
   assertEquals(calls.graph[0][0], {
     scopes: undefined,
     category: undefined,
     tags: undefined,
-    tagsAll: ['cairn:p1'],
+    tagsAll: ['board:p1'],
     detail: 'full',
   });
   assertEquals(JSON.parse(r.content[0].text), { nodes: [], edges: [], truncated: false, total: 0 });

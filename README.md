@@ -79,7 +79,7 @@ direction and type, up to 100 memories, each with the path that reached it; `det
 memory that a newer one `supersedes` is flagged `superseded: true`; it is flagged, not ranked lower.
 
 `graph` reads a whole project at once: it takes the search filters (`tags` or `tags_all` is required, for example
-`tags_all: ["cairn:<project>"]`) and returns the matching memories as `nodes`, oldest first, and every link between them
+`tags_all: ["board:<project>"]`) and returns the matching memories as `nodes`, oldest first, and every link between them
 as `edges` (`{from, to, type}`). Each node has its id, scope, category, tags, `createdAt`, a 160-character snippet,
 `superseded` and any active `claim`; `detail: "full"` gives the whole content instead. It returns up to 400 nodes, or
 100 with `detail: "full"`, with `total` and `truncated`; links to memories outside the set are left out. Unlike
