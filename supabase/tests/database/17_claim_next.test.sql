@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(19);
+select plan(21);
 
 -- Fixtures (as postgres). w writes s1 and reads s2; w2 writes s1; o has no grants; nobody but postgres sees s3.
 -- Candidates for w on tag status:open, oldest first: m1 (s2, not writable), m2 (deleted), m3 (superseded by m6),
@@ -84,6 +84,22 @@ select is((select count(*) from agent_memory.claim_next(null, null, array['statu
   'every match is claimed, so another member gets nothing');
 reset role;
 
+-- A deactivated member's indefinite claim does not block the queue, and is replaced
+insert into agent_memory.members (id, display_name, kind) values ('66666666-6666-6666-6666-666666666666', 'd', 'bot');
+insert into agent_memory.memories (id, scope_id, content, category, tags, created_by, updated_by, embedding)
+values ('aaaaaaaa-0000-0000-0000-000000000010', 'a1000000-0000-0000-0000-0000000000a1', 'm10', 'other', array['kind:deact'],
+        '11111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', array_fill(0.1::real, array[384])::extensions.vector);
+insert into agent_memory.memory_claims (memory_id, member_id, description, expires_at)
+values ('aaaaaaaa-0000-0000-0000-000000000010', '66666666-6666-6666-6666-666666666666', 'bot held forever', null);
+update agent_memory.members set deactivated_at = now() where id = '66666666-6666-6666-6666-666666666666';
+select set_config('agent_memory.member_id', '11111111-1111-1111-1111-111111111111', true);
+set local role agent_memory_member;
+select is((select memory_id from agent_memory.claim_next(null, null, array['kind:deact'], null, 'unblocked', 60, false, null)),
+  'aaaaaaaa-0000-0000-0000-000000000010'::uuid, 'a deactivated holder''s indefinite claim does not block claim_next');
+reset role;
+select is((select agent_memory.member_name(member_id) || '|' || description from agent_memory.memory_claims
+  where memory_id = 'aaaaaaaa-0000-0000-0000-000000000010'), 'w|unblocked', 'and is replaced by the caller''s claim');
+
 -- A memory freed by expiry comes back
 update agent_memory.memory_claims set claimed_at = now() - interval '2 hours', expires_at = now() - interval '1 hour'
   where memory_id = 'aaaaaaaa-0000-0000-0000-000000000004';
@@ -92,7 +108,7 @@ set local role agent_memory_member;
 select is((select memory_id from agent_memory.claim_next(null, null, array['kind:intent'], null, 'x', 60, false, null)),
   'aaaaaaaa-0000-0000-0000-000000000004'::uuid, 'an expired claim frees the memory for the next caller');
 reset role;
-select is((select count(*) from agent_memory.memory_claims), 5::bigint, 'one claim row per memory');
+select is((select count(*) from agent_memory.memory_claims), 6::bigint, 'one claim row per memory');
 
 select * from finish();
 rollback;
