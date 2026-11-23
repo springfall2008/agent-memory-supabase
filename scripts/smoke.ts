@@ -52,7 +52,9 @@ const BASE_TOOLS = [
   'relate_memories',
   'unrelate_memories',
   'neighbours',
+  'graph',
   'claim_memory',
+  'claim_next',
   'release_claim',
   'my_claims',
   'update',
@@ -180,8 +182,24 @@ await step('my_claims', async () => {
   ok(hit?.memory.claim?.mine === true, 'search result does not show the claim');
 });
 await step('release_claim', async () => {
-  const r = await call('release_claim', { memory_id: id });
+  const r = await call('release_claim', { memory_id: id, session_label: 'smoke' });
   ok(r.released === true, 'claim not released');
+});
+await step('claim_next', async () => {
+  const r = await call('claim_next', {
+    description: 'smoke test claim_next',
+    minutes: 5,
+    tags_all: ['smoke-test'],
+    scopes: [scope],
+    session_label: 'smoke',
+  });
+  ok(r.claimed === true && typeof r.memory?.id === 'string', 'claim_next claimed nothing');
+  const again = await call('release_claim', { memory_id: r.memory.id, session_label: 'smoke' });
+  ok(again.released === true, 'claim_next claim not released');
+});
+await step('graph', async () => {
+  const r = await call('graph', { tags: ['smoke-test'], scopes: [scope] });
+  ok(r.nodes.some((n: Json) => n.id === id) && Array.isArray(r.edges), 'graph does not show the stored memory');
 });
 await step('list_recent', async () => {
   const r = await call('list_recent', { limit: 10, scopes: [scope] });

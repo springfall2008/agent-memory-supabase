@@ -69,9 +69,9 @@ Deno.test('edge function end-to-end over MCP', async () => {
     const ro = await issue(world.ro.id);
     const none = await issue(world.none.id);
 
-    await t('tools/list returns 28 tools', async () => {
+    await t('tools/list returns 30 tools', async () => {
       const c = await open(rw.token);
-      assertEquals((await c.listTools()).tools.length, 28);
+      assertEquals((await c.listTools()).tools.length, 30);
     });
 
     await t('store, search, update, find_related, delete as rw', async () => {
@@ -200,11 +200,58 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(hit.memory.claim.session.label, 'e2e');
       const mine = parse(await c.callTool({ name: 'my_claims', arguments: {} }));
       assert(mine.claims.some((x: { memory: { id: string } }) => x.memory.id === m.id), 'my_claims lists it');
-      const released = parse(await c.callTool({ name: 'release_claim', arguments: { memory_id: m.id } }));
+      const otherSession = await c.callTool({
+        name: 'claim_memory',
+        arguments: { memory_id: m.id, description: 'me too', session_label: 'e2e-b' },
+      });
+      assertEquals(otherSession.isError, true);
+      assertStringIncludes(
+        (otherSession.content as { text: string }[])[0].text,
+        "is claimed by your session 'e2e' indefinitely",
+      );
+      const wrongRelease = await c.callTool({ name: 'release_claim', arguments: { memory_id: m.id } });
+      assertEquals(wrongRelease.isError, true);
+      const released = parse(
+        await c.callTool({ name: 'release_claim', arguments: { memory_id: m.id, session_label: 'e2e' } }),
+      );
       assertEquals(released, { released: true });
       const again = parse(await c.callTool({ name: 'search', arguments: { query: 'tapir ticket' } }));
       const after = again.results.find((r: { memory: { id: string } }) => r.memory.id === m.id);
       assertEquals('claim' in after.memory, false);
+    });
+
+    await t('claim_next takes the oldest free intent; graph returns the nodes and the link', async () => {
+      const c = await open(rw.token);
+      const tag = `e2e-next-${crypto.randomUUID().slice(0, 8)}`;
+      const store = async (content: string) =>
+        parse(
+          await c.callTool({
+            name: 'store',
+            arguments: { scope: world.alpha.name, content, category: 'other', tags: [tag, 'status:open'] },
+          }),
+        );
+      const older = await store('first intent to explore');
+      const newer = await store('second intent to explore');
+      await c.callTool({
+        name: 'relate_memories',
+        arguments: { from_id: newer.id, to_id: older.id, type: 'depends-on' },
+      });
+      const next = async () =>
+        parse(
+          await c.callTool({
+            name: 'claim_next',
+            arguments: { description: 'exploring', tags_all: [tag, 'status:open'], session_label: 'e2e-worker' },
+          }),
+        );
+      const first = await next();
+      assertEquals([first.claimed, first.memory.id, first.memory.content], [true, older.id, 'first intent to explore']);
+      assertEquals((await next()).memory.id, newer.id);
+      assertEquals(await next(), { claimed: false });
+      const g = parse(await c.callTool({ name: 'graph', arguments: { tags: [tag] } }));
+      assertEquals(g.nodes.map((n: { id: string }) => n.id), [older.id, newer.id]);
+      assertEquals(g.edges, [{ from: newer.id, to: older.id, type: 'depends-on' }]);
+      assertEquals([g.total, g.truncated], [2, false]);
+      assertEquals(g.nodes[0].claim.mine, true);
     });
 
     await t('spoofing a member id changes nothing', async () => {
@@ -256,22 +303,22 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(parse(await c.callTool({ name: 'list_scopes', arguments: {} })), { count: 0, scopes: [] });
     });
 
-    await t('admin token sees 41 tools; non-admin and bot see the 28 non-admin tools', async () => {
+    await t('admin token sees 43 tools; non-admin and bot see the 30 non-admin tools', async () => {
       const [a] = await sql`
         insert into agent_memory.members (display_name, kind) values (${adminName}, 'human') returning id`;
       await setAdmin(sql, adminName, true);
       const admin = await issue(a.id);
       const names = async (tok: string) => (await (await open(tok)).listTools()).tools.map((x) => x.name);
       const adminTools = await names(admin.token);
-      assertEquals(adminTools.length, 41);
+      assertEquals(adminTools.length, 43);
       assertEquals(adminTools.filter((n) => n.startsWith('admin_')).length, 13);
       const base = await names(rw.token);
-      assertEquals(base.length, 28);
+      assertEquals(base.length, 30);
       assert(!base.some((n) => n.startsWith('admin_')));
       assertEquals(await names(none.token), base);
       const bot = await issue(world.bw.id);
       assertEquals(await names(bot.token), base);
-      assertEquals(adminTools.slice(0, 28), base);
+      assertEquals(adminTools.slice(0, 30), base);
     });
 
     await t('two clients on one token trade a question and answer', async () => {
@@ -365,7 +412,7 @@ Deno.test('edge function end-to-end over MCP', async () => {
       assertEquals(scopes.count, 1);
       assertEquals(scopes.scopes[0].scope, world.alpha.name);
       assertEquals(scopes.scopes[0].access, 'read');
-      assertEquals((await nc.listTools()).tools.length, 28);
+      assertEquals((await nc.listTools()).tools.length, 30);
 
       await ok('admin_deactivate_member', { name: newName });
       const r = await post({ authorization: `Bearer ${issued.token}` }, '', {
