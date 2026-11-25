@@ -12,7 +12,8 @@ first round writes those.
    - **Scope:** which shared-memory scope holds the board. Call `list_scopes`. It must be one they can write. Mention
      whether that scope is public-safe.
    - **Max open intents** (default 4) and **claim minutes**, which is how long a worker holds an intent before it is
-     treated as abandoned (default 60).
+     treated as abandoned (default 60). Max open intents should be at least the number of workers plus one, so a worker
+     that finishes finds the next intent already waiting.
 3. **Draft the rules.** Draft them from their answers and from the workspace in front of you: its README, test and build
    commands, and any scripts that measure what the goal cares about. Use the rules template below, then show the draft
    to the person and ask for changes or approval. Do not write rules the person has not approved.

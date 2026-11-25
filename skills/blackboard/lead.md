@@ -54,10 +54,15 @@ label from SKILL.md, made once in this conversation, for every claim call.
      If nothing is open, the goal is not met and it is not unreachable, write at least one intent.
    - **Hints.** Treat every new hint as advice to weigh. If it asks for a change to the rules, tell the person; do not
      edit the rules.
-6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below.
+6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below. If step 4 found no
+   new facts or hints and step 5 changed nothing, skip the rewrite: its `Last round at` stays, so nothing is missed.
 7. **If an intent is free and you have time,** you may do one exactly as work.md does, using your lead label.
 8. **End the round,** keeping your claim on the goal: it holds the lead role until the next round renews it. Say in two
    or three lines what the round decided, ending with `(label: <your lead label>)`.
+9. **Pace the next round** (self-paced `/loop`). Count the open intents nobody holds a claim on.
+   - **None free:** about 5 minutes. Workers that finish their intent will find nothing to claim until you plan again.
+   - **Some free:** about 15 minutes.
+   - Never more than 25 minutes, so your 30-minute claim on the goal does not lapse between rounds.
 
 ## Intent template
 

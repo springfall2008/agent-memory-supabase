@@ -84,6 +84,10 @@ Each `lead` or `work` invocation is one round or one cycle. To keep going, run i
 recipe says **end the loop**, finish this invocation and do not schedule another: in a self-paced `/loop`, schedule no
 further wake-up; in a fixed-interval `/loop`, delete its cron job.
 
+Use a self-paced `/loop` (no interval), so each round or cycle picks its own delay from the board, as the recipes say.
+Only the lead writes intents, and it cannot be woken by a fact, so it paces short whenever workers are, or soon will
+be, waiting for work. A worker paces about 5 minutes between empty cycles so that it outlasts the lead's gap.
+
 ## hint
 
 1. Find the goal.

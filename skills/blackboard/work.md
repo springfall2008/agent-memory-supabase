@@ -13,8 +13,10 @@ conversation, for every claim call.
    - `minutes`: the goal's claim minutes;
    - `session_label`: your label;
    - `description`: `Working on this for board <project>`.
-3. **If nothing is free** (`claimed: false`), say `No free intent (empty cycle <k> of 3, label: <your label>)`, where
-   `<k>` counts empty cycles in a row in this conversation. If `<k>` is 3, **end the loop**. Otherwise end this cycle.
+3. **If nothing is free** (`claimed: false`), say `No free intent (empty cycle <k> of 6, label: <your label>)`, where
+   `<k>` counts empty cycles in a row in this conversation. If `<k>` is 6, **end the loop**. Otherwise end this cycle,
+   and in a self-paced `/loop` wait about 5 minutes before the next: the lead plans on its own timer, up to 25 minutes
+   apart, so six cycles 5 minutes apart outlast its gap. After a cycle that did an intent, start the next one at once.
 4. **Check it is not already done.** Call `neighbours` on the intent with `direction "in"`, `types ["derived-from"]` and
    `detail "short"`. If any neighbour has the tag `kind:fact`, a previous worker already recorded its result before
    stopping. Skip to step 8 and write no fact.
