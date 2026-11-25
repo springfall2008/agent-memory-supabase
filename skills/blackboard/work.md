@@ -57,8 +57,7 @@ line, exactly one of:
 - step 3, nothing free: `BOARD-WORK none`;
 - step 6, the claim refused: `BOARD-WORK partial intent=<intent id>`;
 - step 8, after storing your fact: `BOARD-WORK fact <its verdict> intent=<intent id>`;
-- step 8, reached from step 4 or step 6 because a fact already existed: `BOARD-WORK fact <that fact's verdict>
-  intent=<intent id>`.
+- step 8, reached from step 4 or step 6 because a fact already existed: the same `fact` line, with that fact's verdict.
 
 The verdict is the word after `verdict:`, for example `confirmed`.
 

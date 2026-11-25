@@ -28,12 +28,39 @@ first round writes those.
    - `/loop /blackboard work <project>` in as many others as they like, on any model;
    - `/blackboard status <project>`, `hint` and `stop` from anywhere.
 
+## From a board file
+
+`start <project> from=<file>` is how a board runner starts a board, and it works by hand too. The file is TOML, which
+you read with the Read tool. The file is the person's approval: ask nothing.
+
+1. **Read the file.**
+   - Its `board` must equal `<project>`. If it doesn't, say so, end with `BOARD-START not-running`, and write nothing.
+   - Take `scope`, `goal`, `done_when` and `rules`.
+   - Take `max_open_intents` (default 4), `claim_minutes` (default 60) and `max_intents` (default none).
+   - `Measure` is `yes` when the file has a `[measure]` table, otherwise `no`.
+2. **Look for the board.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]`, full detail.
+3. **No goal:** write the board as in step 4 above.
+   - The goal follows the goal template, with `Goal:` from `goal`, `Done when:` from `done_when`, and the numbers from
+     the file. `Started:` is today's date, `by board file <file name, without its directory>`.
+   - The rules memory holds `rules` exactly as written.
+   - End with `BOARD-START created <goal id>`.
+4. **The goal is `state:running`:** write nothing. Compare the file's goal, Done when and rules with the memories. List
+   each one that differs, in a line or two. End with `BOARD-START exists`.
+5. **The goal is `state:stopped`, its conclusion contains `Stopped: intent limit`, and the file's `max_intents` is
+   higher than the goal's `Max intents`, or is absent:** follow SKILL.md's `resume` with that limit. End with
+   `BOARD-START resumed`. This is the only change `from=` ever makes to an existing board.
+6. **Otherwise** (done, stopped for another reason, or a limit that isn't higher): say why, write nothing, and end with
+   `BOARD-START not-running`.
+
+The `BOARD-START` line is the very last line of your final message, written exactly as shown.
+
 ## Goal template
 
 ```
 Goal: <one paragraph: what and why>
 Done when: <the checkable condition>
 Max open intents: <n>
+Max intents: <n, or none>
 Claim minutes: <n>
 Measure: <yes if a measurement must confirm the goal before it is concluded, otherwise no>
 Started: <ISO date> by <the person>

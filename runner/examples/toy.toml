@@ -1,0 +1,38 @@
+# A toy board for testing the runner and the skill. Copy it, change `board` to a fresh toy-<hex> name, and set
+# `workspace` to an existing directory. Delete the board's memories (tag board:toy-<hex>) afterwards.
+board = "toy-example"
+scope = "agent-memory-tool"
+workspace = "/tmp"
+
+goal = """Find the smallest positive integer n whose square ends in the digits 444. This is a toy goal for testing
+the board runner."""
+done_when = """A fact confirms n and shows n*n, and a fact shows that no smaller positive n has a square ending in 444."""
+rules = """Rules for board toy-example.
+How to work: compute with python3 one-liners only; create and change no files.
+How to verify: run the computation and quote its output.
+Evidence: the exact command and its output.
+Long output: none expected.
+Allowed beyond the base safety rules: nothing.
+Never: anything beyond computing."""
+
+max_open_intents = 2
+claim_minutes = 10
+max_intents = 3
+
+[measure]
+command = "./measure.sh"          # run in workspace; exits 0 when BOARD_CANDIDATE is the right answer
+timeout_minutes = 2
+
+[lead]
+model = "sonnet"
+round_every_minutes = 10
+
+[[worker]]
+model = "haiku"
+[[worker]]
+model = "haiku"
+
+[permissions]
+allow = ["Bash(python3 -c *)"]
+max_turns = 60
+worker_timeout_minutes = 15
