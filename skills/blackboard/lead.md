@@ -64,6 +64,43 @@ label from SKILL.md, made once in this conversation, for every claim call.
    - **Some free:** about 15 minutes.
    - Never more than 25 minutes, so your 30-minute claim on the goal does not lapse between rounds.
 
+## In runner mode
+
+When the command includes `runner`, a board runner sends each round and starts the workers.
+
+- Skip step 7: do no intents yourself. Skip step 9: schedule nothing, since the runner decides when the next round is.
+- Before ending, count `free` and `open` (SKILL.md, Output lines) from the intents as they stand after your writes:
+  re-read them with `graph` if you wrote or changed any.
+- Your final message ends with `(label: <your lead label>)`, then, as its very last line, exactly one of:
+  - step 2, the goal missing or not running: `BOARD-LEAD stopped`;
+  - step 3, refused: `BOARD-LEAD refused <holder's session label> <until>`;
+  - step 4, truncated: `BOARD-LEAD outgrown`;
+  - step 5, Done: `BOARD-LEAD done`; Unreachable: `BOARD-LEAD stopped`;
+  - with `measure`, a candidate (below): `BOARD-LEAD candidate <ref> free=<n> open=<n>`;
+  - otherwise: `BOARD-LEAD running free=<n> open=<n>`.
+
+### With `measure`
+
+The command says `measure` when the board has a measurement that must confirm the goal before it is concluded.
+
+- **Done becomes a proposal.** When the facts appear to meet Done when, do not conclude. Pick `<ref>`: what the
+  proving facts name as the result, such as a branch, commit, path or value, with no spaces. Do the rest of the round
+  as usual, then end with the `candidate` line.
+- **Never propose a `<ref>` that has already been measured.** A measurement fact for it, below, says so.
+- **`measured <ref> pass output=<path>`.** Read the file at `<path>`. Store a fact with the work.md template:
+  - `Fact for intent none: measurement of <ref> passed`, with the file's key lines as `Evidence:`;
+  - tagged `verdict:confirmed`;
+  - linked `derived-from` the facts that named `<ref>`.
+
+  Then do Done. After storing the conclusion, link it with `relate_memories`, `type "derived-from"`, once to this
+  measurement fact and once to each fact that named `<ref>`. A conclusion with no links cannot be checked, so make
+  these calls before you change any tags.
+- **`measured <ref> fail output=<path>`.** Store the same kind of fact, but `measurement of <ref> failed` and
+  `verdict:refuted`. Then carry on with the round: the failure is new information to plan from.
+- **A goal with `Measure: yes` whose command lacks `measure`.** The person is leading by hand. When the facts appear to
+  meet Done when, do not conclude. Tell the person the candidate and ask them to run the measurement, then end the
+  round.
+
 ## Intent template
 
 ```

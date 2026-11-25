@@ -24,7 +24,36 @@ reasons about the whole board and writes intents. Any number of sessions work, o
 | `status <project>`        | Below                                                                         |
 | `stop <project>`          | Below                                                                         |
 
-The shared-memory tools may be deferred. Load them first with ToolSearch, query `+shared-memory`.
+The shared-memory tools may be deferred. Load them first with ToolSearch, query `+shared-memory`, `max_results 30`.
+
+### Arguments for lead and work
+
+After `<project>`, `lead` and `work` accept these words, in any order:
+
+- `label=<label>`: use this session label rather than making one. A board runner passes it.
+- `runner`: runner mode. A board runner started this session and reads its output. The recipes say what changes; above
+  all, the **very last line** of your final message is one output line from the table below, after `(label: …)`.
+- `measure` (lead only): a measurement must confirm the goal before it is concluded. See lead.md.
+- `measured <ref> pass|fail output=<path>` (lead only): the result of measuring a candidate. See lead.md.
+- `takeover` (lead only): as in the table above.
+
+### Output lines in runner mode
+
+| Line                                           | When                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `BOARD-WORK fact <verdict> intent=<id>`        | work: a fact was recorded, or one already existed (its verdict)    |
+| `BOARD-WORK none`                              | work: no free intent                                               |
+| `BOARD-WORK partial intent=<id>`               | work: the claim was lost and a partial-result hint was stored      |
+| `BOARD-WORK stopped`                           | work: the goal is missing or not running                           |
+| `BOARD-LEAD running free=<n> open=<n>`         | lead: the round is done                                            |
+| `BOARD-LEAD candidate <ref> free=<n> open=<n>` | lead, with `measure`: the goal looks met by `<ref>`                |
+| `BOARD-LEAD done`                              | lead: the goal was concluded as met                                |
+| `BOARD-LEAD stopped`                           | lead: the goal is not running, or was concluded unreachable        |
+| `BOARD-LEAD outgrown`                          | lead: the intent list was truncated                                |
+| `BOARD-LEAD refused <holder> <until>`          | lead: another session holds the lead                               |
+
+Write the line exactly as shown, with no other text, quotes or formatting on it. `free` is the number of open intents
+with no active claim once this round's writes are done. `open` is the number of open intents, claimed or not.
 
 ## The board
 
@@ -62,6 +91,8 @@ session label fails.
 - Check the scope's own rules with `list_scopes` before writing. A board in a public-safe scope gets public-safe facts.
 
 ## Session label
+
+If the command gives `label=<label>`, use that label and skip the rest of this section.
 
 Each session makes one label, the first time it runs a blackboard command in this conversation, and reuses it for every
 claim and release afterwards:

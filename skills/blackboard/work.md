@@ -47,6 +47,21 @@ conversation, for every claim call.
    - Call `release_claim` on the intent with your `session_label`.
    - Say in one line what the fact recorded, ending with `(label: <your label>)`. That ends the cycle.
 
+## In runner mode
+
+When the command includes `runner`, this cycle is the whole run: do one cycle, schedule nothing, and **end the loop**.
+There is no empty-cycle count or pacing. Your final message ends with `(label: <your label>)`, then, as its very last
+line, exactly one of:
+
+- step 1, the goal missing or not running: `BOARD-WORK stopped`;
+- step 3, nothing free: `BOARD-WORK none`;
+- step 6, the claim refused: `BOARD-WORK partial intent=<intent id>`;
+- step 8, after storing your fact: `BOARD-WORK fact <its verdict> intent=<intent id>`;
+- step 8, reached from step 4 or step 6 because a fact already existed: `BOARD-WORK fact <that fact's verdict>
+  intent=<intent id>`.
+
+The verdict is the word after `verdict:`, for example `confirmed`.
+
 ## Fact template
 
 ```

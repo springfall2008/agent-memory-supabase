@@ -35,6 +35,7 @@ Goal: <one paragraph: what and why>
 Done when: <the checkable condition>
 Max open intents: <n>
 Claim minutes: <n>
+Measure: <yes if a measurement must confirm the goal before it is concluded, otherwise no>
 Started: <ISO date> by <the person>
 ```
 
