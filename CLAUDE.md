@@ -99,7 +99,20 @@ unreadable or deleted ends), the superseded set, and the batched claims. No deca
 boards on these tools: graph, claim_next, claims, links and search browse. It has no server code of its own. The design
 is in `docs/superpowers/specs/2026-11-23-blackboard-skill-design.md`. Test a change to it the way the plan
 `docs/superpowers/plans/2026-11-23-blackboard-skill.md` did: subagents run single cycles on a throwaway `board:toy-*`
-board in `agent-memory-tool`, and the board is deleted afterwards.
+board in `agent-memory-tool`, and the board is deleted afterwards. This repo holds the maintained copy; projects keep
+only their board files.
+
+**Board runner.** `runner/` is Python 3.11+, standard library only, with `unittest` tests (CI job `runner`). It drives a
+board from a TOML board file. Design: `docs/superpowers/specs/2026-11-24-board-runner-design.md`.
+
+- **Processes:** it keeps the lead as an interactive `claude` session in tmux, and starts one fresh `claude -p` worker
+  per intent, per configured slot.
+- **Board-blind:** it never touches shared memory. Sessions run the skill in `runner` mode and end with a `BOARD-WORK`,
+  `BOARD-LEAD` or `BOARD-START` line, which `protocol.py` parses. A Stop hook (`hook.py`) appends each lead turn to
+  `events.jsonl`.
+- **Scheduler:** `scheduler.py` is pure, with events in and actions out, so every scheduling rule is unit-tested with a
+  fake clock. `cli.py` is the I/O loop around it.
+- **Tests:** change the scheduler test-first. Test runner-mode skill changes with subagents on toy boards, as above.
 
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in

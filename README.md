@@ -147,6 +147,21 @@ memory. Workers never push, merge or deploy unless those rules allow it. The boa
 a board in a public-safe scope must hold only public-safe facts. The design is in
 `docs/superpowers/specs/2026-11-23-blackboard-skill-design.md`.
 
+This is the maintained copy of the skill. A project that uses it keeps only its own board file.
+
+### Board runner
+
+[`runner/`](runner/) is a Python program that runs a board for you, so you don't drive the sessions by hand under
+`/loop`. You give it a board file (TOML) with the goal, Done when, rules, an optional measurement command, the lead's
+model and one slot per worker, for example one Opus and one Sonnet:
+
+- the lead is an interactive Claude Code session in tmux, which you can watch and talk to;
+- each worker is a fresh `claude -p` for each intent;
+- the runner asks the lead for a round as soon as one is needed, so no worker waits for a timer.
+
+It enforces each worker's runtime limit and the board's total intent limit, which you can raise to resume. Setup and
+the board file reference are in [`runner/README.md`](runner/README.md).
+
 ## Threads and sessions
 
 Memories hold what is known; **threads** hold the discussion around it. A thread lives in one scope, has a title and

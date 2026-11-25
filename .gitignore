@@ -9,3 +9,6 @@ memories*.json
 backup*.json
 ids*.txt
 !.env.example
+
+# Python (runner/)
+__pycache__/

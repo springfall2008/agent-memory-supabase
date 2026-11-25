@@ -22,3 +22,13 @@ jobs:
       - run: supabase test db
       - run: deno task test:int
       # E2E needs the edge runtime and the model download, so it stays a local step (deno task test:e2e).
+
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -t . -v
+        working-directory: runner
