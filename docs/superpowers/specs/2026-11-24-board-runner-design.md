@@ -1,6 +1,16 @@
 # Board runner: design
 
-Status: approved, 2026-11-25.
+Status: implemented, 2026-11-25. Builder's calls (from the plan's ledger):
+- measurement output reaches the lead as a file (`output=<path>`), not inline lines, because a newline through tmux
+  would submit early;
+- the `BOARD-` line is the lowest line with its prefix, not strictly the last line;
+- the typing guard needs a visible, empty input box (Claude Code's dim placeholder counts as empty), quiet for 30 s;
+- five failed measurements stop the runner, because candidates cost no intents and could otherwise loop;
+- the runner warns when the lead waits at Claude Code's folder trust dialog;
+- Read rules cover both a symlink and its target.
+
+The end-to-end run on a toy board passed: a real tmux lead and `claude -p` workers, candidate, failed measurement,
+replan, passing measurement, done, plus Ctrl-C once and a resumed run.
 
 ## Intent
 
