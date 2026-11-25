@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import signal
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from .board_file import BoardFile, BoardFileError, load_board_file
 from .hook import hook_stop
-from .launch import lead_argv, lead_env, lead_prompt, lead_settings, new_label, oneshot_argv, worker_argv, worker_env
+from .launch import lead_argv, lead_env, lead_prompt, lead_settings, model_args_env, new_label, oneshot_argv, worker_argv, worker_env
 from .protocol import claude_result_text, parse_lead, parse_start, parse_work
 from .scheduler import (
     Interrupt,
@@ -42,6 +43,7 @@ from .tmux import Tmux, input_line
 TYPING_QUIET_SECONDS = 30
 KILL_GRACE_SECONDS = 10
 ONESHOT_TIMEOUT_SECONDS = 15 * 60
+LEAD_CHECK_SECONDS = 10
 SCRIPT = Path(__file__).resolve().parent.parent / "board-runner"
 
 
@@ -64,6 +66,7 @@ class Runner:
         sleep: Callable[[float], None] = time.sleep,
         run: Callable = subprocess.run,
         kill_pid: Callable[[int, int], None] = os.kill,
+        kill_group: Callable[[int, int], None] = os.killpg,
         runner_script: Path = SCRIPT,
         out=sys.stdout,
         err=sys.stderr,
@@ -76,6 +79,11 @@ class Runner:
         self.sleep = sleep
         self.run_cmd = run
         self.kill_pid = kill_pid
+        self.kill_group = kill_group
+        self.home = Path(home)
+        self.lock_handle = None
+        self.lead_dead = False
+        self.last_lead_check = 0.0
         self.runner_script = runner_script
         self.out = out
         self.err = err
@@ -154,14 +162,28 @@ class Runner:
         return claude_result_text(result.stdout or "")
 
     def _write_settings(self) -> None:
-        hook = [str(self.runner_script), "hook-stop", self.bf.board]
+        # The hook runs under the tmux server's environment: pin the interpreter and the runner home explicitly.
+        hook = [sys.executable, str(self.runner_script), "hook-stop", self.bf.board, "--home", str(self.home)]
         (self.dir / "lead-settings.json").write_text(json.dumps(lead_settings(hook, self.dir), indent=2))
         (self.dir / "oneshot-settings.json").write_text(json.dumps(lead_settings(None, self.dir), indent=2))
 
     # --- the run ---------------------------------------------------------
 
+    def _lock(self) -> bool:
+        self.lock_handle = (self.dir / "lock").open("w")
+        try:
+            fcntl.flock(self.lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.lock_handle.close()
+            self.lock_handle = None
+            return False
+        return True
+
     def run(self, takeover: bool = False) -> int:
         self.dir.mkdir(parents=True, exist_ok=True)
+        if not self._lock():
+            self.log(f"another board-runner is already running board {self.bf.board}", warn=True)
+            return 2
         try:
             lead_alive = self.tmux.has_session(self.session)
         except FileNotFoundError:
@@ -202,7 +224,8 @@ class Runner:
             self.first_prompt = first
         else:
             argv = lead_argv(self.bf, session_id, resume, self.dir / "lead-settings.json", first)
-            self.tmux.new_session(self.session, self.bf.workspace, argv)
+            _, lead_overrides = model_args_env(self.bf.lead_model, {})
+            self.tmux.new_session(self.session, self.bf.workspace, argv, env=lead_overrides)
             self.log(f"lead started in tmux session {self.session} (watch: tmux attach -t {self.session})")
 
         previous = signal.getsignal(signal.SIGINT)
@@ -215,6 +238,8 @@ class Runner:
         finally:
             if previous is not None:
                 signal.signal(signal.SIGINT, previous)
+            if self.lock_handle is not None:
+                self.lock_handle.close()
 
     def _loop(self, scheduler: Scheduler, state: dict) -> int:
         while True:
@@ -230,6 +255,8 @@ class Runner:
                 actions += scheduler.on_event(Interrupt(), now)
             actions += scheduler.on_event(Tick(), now)
             self._reap_releases()
+            actions += self._check_lead(scheduler, now)
+            self._sample_input(now)
 
             if scheduler.poll_send(now) is not None and self._may_send(now):
                 prompt = scheduler.poll_send(now)
@@ -241,7 +268,7 @@ class Runner:
 
             for action in actions:
                 if self._do(action, scheduler, state, now):
-                    return 0
+                    return 1 if self.lead_dead else 0
             self.sleep(1)
 
     # --- events in -------------------------------------------------------
@@ -272,12 +299,12 @@ class Runner:
             proc = worker["proc"]
             if proc.poll() is None:
                 if worker.get("kill_at") and now >= worker["kill_at"]:
-                    proc.kill()
+                    self._signal_group(proc, signal.SIGKILL)
                 continue
             worker["stdout"].close()
             try:
-                text = claude_result_text(Path(worker["path"]).read_text())
-            except OSError:
+                text = claude_result_text(Path(worker["path"]).read_text(errors="replace"))
+            except (OSError, ValueError):
                 text = None
             result = parse_work(text)
             self.log(f"worker {slot} ({worker['label']}) exited {proc.returncode}: {result.kind}")
@@ -293,7 +320,7 @@ class Runner:
         if proc.poll() is None:
             if now >= m["deadline"]:
                 self.log(f"measurement of {m['ref']} timed out", warn=True)
-                proc.kill()
+                self._signal_group(proc, signal.SIGKILL)
             return []
         m["handle"].close()
         passed = proc.returncode == self.bf.measure.pass_exit_code and now < m["deadline"]
@@ -304,19 +331,42 @@ class Runner:
     def _reap_releases(self) -> None:
         self.releases = [proc for proc in self.releases if proc.poll() is None]
 
-    def _may_send(self, now: float) -> bool:
-        """True when there is no hold file and the lead's input box has been empty for TYPING_QUIET_SECONDS."""
-        if (self.dir / "hold").exists():
-            return False
+    def _check_lead(self, scheduler: Scheduler, now: float) -> list:
+        if self.lead_dead or now - self.last_lead_check < LEAD_CHECK_SECONDS:
+            return []
+        self.last_lead_check = now
+        try:
+            alive = self.tmux.has_session(self.session)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if alive:
+            return []
+        self.lead_dead = True
+        scheduler.lead_gone()
+        return [
+            Warn(
+                f"The lead's tmux session {self.session} has ended. Finishing running workers, then exiting; "
+                "run again to restart the lead (it resumes the same conversation)."
+            )
+        ] + scheduler.on_event(Tick(), now)
+
+    def _sample_input(self, now: float) -> None:
+        """Watch the lead's input box on every loop, so typing between sends is seen too."""
+        if self.lead_dead:
+            return
         try:
             current = input_line(self.tmux.capture(self.session))
         except (OSError, subprocess.SubprocessError):
-            return False
-        if current != self.typing_value:
+            current = None
+        if current != self.typing_value or current is None:
             self.typing_value = current
             self.typing_since = now
+
+    def _may_send(self, now: float) -> bool:
+        """No hold file, a visible and empty input box, and no change to it for TYPING_QUIET_SECONDS."""
+        if (self.dir / "hold").exists() or self.lead_dead:
             return False
-        return current == "" and now - self.typing_since >= TYPING_QUIET_SECONDS
+        return self.typing_value == "" and now - self.typing_since >= TYPING_QUIET_SECONDS
 
     # --- actions out -----------------------------------------------------
 
@@ -327,13 +377,20 @@ class Runner:
             worker = self.workers.get(action.slot)
             if worker:
                 self.log(f"stopping worker {action.slot} ({worker['label']})")
-                worker["proc"].terminate()
+                self._signal_group(worker["proc"], signal.SIGTERM)
                 worker["kill_at"] = now + KILL_GRACE_SECONDS
         elif isinstance(action, Release):
             prompt = f"/blackboard release {self.bf.board} label={action.label} minutes={action.minutes}"
             argv = oneshot_argv(self.bf, prompt, self.dir / "oneshot-settings.json")
             self.releases.append(
-                self.popen(argv, cwd=str(self.bf.workspace), env=lead_env(self.bf), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.popen(
+                    argv,
+                    cwd=str(self.bf.workspace),
+                    env=lead_env(self.bf),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
             )
             self.log(f"releasing the claims of {action.label}")
         elif isinstance(action, RunMeasure):
@@ -344,6 +401,12 @@ class Runner:
             self._shutdown(action.kill_workers, state)
             return True
         return False
+
+    def _signal_group(self, proc, sig: int) -> None:
+        try:
+            self.kill_group(proc.pid, sig)
+        except (OSError, ProcessLookupError):
+            pass
 
     def _start_worker(self, slot: int, scheduler: Scheduler, state: dict, now: float) -> None:
         spec = self.bf.workers[slot]
@@ -359,6 +422,8 @@ class Runner:
             env=worker_env(spec),
             stdout=stdout,
             stderr=stderr,
+            # Its own process group: Ctrl-C in the runner's terminal must not reach it, and a kill reaches its children.
+            start_new_session=True,
         )
         stderr.close()
         self.workers[slot] = {"proc": proc, "label": label, "path": path, "stdout": stdout}
@@ -374,7 +439,14 @@ class Runner:
         path = logs / f"{self.measure_count}.log"
         handle = path.open("w")
         env = dict(os.environ, BOARD_CANDIDATE=ref)
-        proc = self.popen(["bash", "-c", self.bf.measure.command], cwd=str(self.bf.workspace), env=env, stdout=handle, stderr=subprocess.STDOUT)
+        proc = self.popen(
+            ["bash", "-c", self.bf.measure.command],
+            cwd=str(self.bf.workspace),
+            env=env,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         self.measure_proc = {
             "proc": proc,
             "ref": ref,
@@ -387,7 +459,9 @@ class Runner:
     def _shutdown(self, kill_workers: bool, state: dict) -> None:
         if kill_workers:
             for worker in self.workers.values():
-                worker["proc"].kill()
+                self._signal_group(worker["proc"], signal.SIGKILL)
+            if self.measure_proc is not None:
+                self._signal_group(self.measure_proc["proc"], signal.SIGKILL)
         try:
             self.tmux.send_line(self.session, "/exit")
         except (OSError, subprocess.SubprocessError):
@@ -417,11 +491,12 @@ def main(argv: list[str] | None = None, stdin=None) -> int:
     status.add_argument("board_file", type=Path)
     hook = sub.add_parser("hook-stop", help="the lead's Stop hook (reads the hook input on stdin)")
     hook.add_argument("board")
+    hook.add_argument("--home", type=Path, default=None)
     args = parser.parse_args(argv)
 
     if args.command == "hook-stop":
         text = (stdin or sys.stdin).read()
-        hook_stop(runner_home() / args.board / "events.jsonl", text, _iso_now)
+        hook_stop((args.home or runner_home()) / args.board / "events.jsonl", text, _iso_now)
         return 0
     try:
         if args.command == "status":

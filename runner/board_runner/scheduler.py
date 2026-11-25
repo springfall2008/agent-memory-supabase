@@ -121,6 +121,11 @@ class Scheduler:
 
     # --- public API ----------------------------------------------------
 
+    def lead_gone(self) -> None:
+        """The lead's session no longer exists: start nothing new, and shut down once running work finishes."""
+        self.lead_pending = False
+        self.draining = True
+
     def worker_started(self, slot: int, label: str, now: float) -> None:
         state = self.slots[slot]
         state.busy = True
@@ -210,7 +215,9 @@ class Scheduler:
         if self.bf.measure is None:
             return [Warn(f"The lead proposed candidate {ref}, but the board file has no [measure].")]
         m = self.measure
-        if ref and ref not in m.done and ref != m.current and ref not in m.queue:
+        if ref in m.done:
+            return [Warn(f"The lead proposed {ref} again, which was already measured; it should plan on instead.")]
+        if ref and ref != m.current and ref not in m.queue:
             m.queue.append(ref)
         return []
 
@@ -242,6 +249,16 @@ class Scheduler:
                 if now - state.started_at >= state.worker.timeout_minutes * 60:
                     state.killing = True
                     actions += [KillWorker(index), Release(state.label or "", state.worker.timeout_minutes)]
+        if self.lead_pending and now - self.last_sent >= 2 * self.bf.round_every_minutes * 60:
+            # No Stop event for two heartbeats: the lead was interrupted, is stuck at a prompt, or died mid-turn.
+            self.lead_pending = False
+            self.needs_person = True
+            actions.append(
+                Warn(
+                    f"The lead has had no turn end for {2 * self.bf.round_every_minutes} minutes; it may need you. "
+                    f"Look with: tmux attach -t board-{self.bf.board}"
+                )
+            )
         if self.lead_pending and not self.busy_warned and now - self.last_sent >= LEAD_BUSY_WARN_SECONDS:
             self.busy_warned = True
             actions.append(

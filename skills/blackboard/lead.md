@@ -47,6 +47,9 @@ label from SKILL.md, made once in this conversation, for every claim call.
        Plan write smaller intents that cover it, if the intent limit allows.
    - **Intent limit.** If the goal has a `Max intents` number, count every intent on the board, in any state. Plan
      writes no intent that would take the count past the limit.
+     - Done comes first: if the facts meet Done when, do Done (or, with `measure`, propose the candidate) even at the
+       limit. With `measure`, a candidate not yet measured also comes first: propose it, and stop at the limit only once
+       no unmeasured candidate remains.
      - When the count has reached the limit and no intent is open, stop the board instead of planning. Store a
        conclusion with the template below whose first line ends `Stopped: intent limit of <n> reached`. Its `Shown by:`
        gives the best result so far and the facts behind it, and it is linked `derived-from` those facts. Then do the

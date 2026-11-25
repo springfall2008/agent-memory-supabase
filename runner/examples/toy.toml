@@ -20,7 +20,9 @@ claim_minutes = 10
 max_intents = 3
 
 [measure]
-command = "./measure.sh"          # run in workspace; exits 0 when BOARD_CANDIDATE is the right answer
+# Run in workspace with BOARD_CANDIDATE set; exits 0 when the candidate is the right answer. Inline, so the example
+# works wherever it is copied.
+command = """python3 -c 'import os, sys; a = next(n for n in range(1, 10**6) if str(n * n).endswith("444")); c = os.environ.get("BOARD_CANDIDATE", ""); print("candidate", c, "expected", a); sys.exit(0 if c == str(a) else 1)'"""
 timeout_minutes = 2
 
 [lead]

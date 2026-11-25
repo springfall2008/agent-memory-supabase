@@ -25,7 +25,8 @@ def last_assistant_text(transcript_path: Path) -> str:
             continue
         if not isinstance(record, dict) or record.get("type") != "assistant":
             continue
-        content = (record.get("message") or {}).get("content")
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         texts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
@@ -43,8 +44,11 @@ def hook_stop(events_path: Path, stdin_text: str, now: Callable[[], str]) -> Non
             data = {}
         if not isinstance(data, dict):
             data = {}
-        transcript = data.get("transcript_path")
-        text = last_assistant_text(Path(transcript)) if isinstance(transcript, str) else ""
+        # Claude Code passes the turn's last message directly; the transcript may not be flushed yet when Stop fires.
+        text = data.get("last_assistant_message")
+        if not isinstance(text, str) or not text.strip():
+            transcript = data.get("transcript_path")
+            text = last_assistant_text(Path(transcript)) if isinstance(transcript, str) else ""
         event = {"time": now(), "session_id": data.get("session_id"), "text": text[-TEXT_CAP:]}
         events_path = Path(events_path)
         events_path.parent.mkdir(parents=True, exist_ok=True)

@@ -254,5 +254,26 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(s.on_event(Interrupt(), 10), [Shutdown(False)])
 
 
+    def test_lead_pending_too_long_needs_the_person(self):
+        s = self.make()
+        s.on_event(Tick(), 900)  # the 15-minute busy warning
+        actions = s.on_event(Tick(), 2 * 20 * 60)
+        self.assertTrue(any("no turn end" in w.message for w in warns(actions)))
+        self.assertIsNone(s.poll_send(10_000))
+        self.assertEqual(starts(s.on_event(running(1), 10_001)), [StartWorker(0)])
+
+    def test_interrupt_after_a_hung_lead_shuts_down(self):
+        s = self.make()
+        s.on_event(Tick(), 2 * 20 * 60)
+        self.assertEqual(s.on_event(Interrupt(), 2 * 20 * 60 + 1), [Shutdown(False)])
+
+    def test_repeated_measured_candidate_warns(self):
+        s = self.make(measure=Measure("./m.sh", 0, 30, False))
+        s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref="r")), 1)
+        s.on_event(MeasureDone("r", False, Path("/m/1.log")), 2)
+        self.send(s, 2)
+        self.assertEqual(len(warns(s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref="r")), 3))), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,5 +76,22 @@ class HookTest(unittest.TestCase):
         hook_stop(self.dir / "no-such-dir" / "sub" / "events.jsonl", "{}", now)
 
 
+    def test_last_assistant_message_preferred(self):
+        stdin = json.dumps({"session_id": "s", "last_assistant_message": "x\nBOARD-LEAD done", "transcript_path": str(self.dir / "missing")})
+        hook_stop(self.events, stdin, now)
+        self.assertTrue(self.events_written()[-1]["text"].endswith("BOARD-LEAD done"))
+
+    def test_non_dict_message_still_appends(self):
+        path = self.transcript(
+            [
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": "BOARD-LEAD done"}]}},
+                {"type": "assistant", "message": "oops"},
+            ]
+        )
+        hook_stop(self.events, json.dumps({"session_id": "s", "transcript_path": str(path)}), now)
+        self.assertEqual(len(self.events_written()), 1)
+        self.assertEqual(self.events_written()[0]["text"], "BOARD-LEAD done")
+
+
 if __name__ == "__main__":
     unittest.main()

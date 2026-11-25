@@ -53,7 +53,7 @@ class WorkerArgvTest(unittest.TestCase):
         self.assertEqual(after(argv, "-p"), "/blackboard work b label=L runner")
         self.assertEqual(after(argv, "--output-format"), "json")
         self.assertEqual(after(argv, "--permission-mode"), "dontAsk")
-        self.assertEqual(after(argv, "--allowedTools"), "Edit,Bash(python3 *),mcp__shared-memory__*")
+        self.assertEqual(after(argv, "--allowedTools"), "Edit,Bash(python3 *),mcp__shared-memory__*,Read(~/.claude/skills/blackboard/**)")
         self.assertEqual(after(argv, "--disallowedTools"), "Bash(git push*)")
         self.assertEqual(after(argv, "--max-turns"), "200")
         self.assertEqual(after(argv, "--model"), "sonnet")
@@ -127,7 +127,7 @@ class LeadTest(unittest.TestCase):
         allow = settings["permissions"]["allow"]
         for rule in LEAD_ALLOW:
             self.assertIn(rule, allow)
-        self.assertIn("Read(/h/**)", allow)
+        self.assertIn("Read(//h/**)", allow)
         self.assertNotIn("hooks", lead_settings(None, Path("/h")))
 
     def test_hook_command_is_quoted(self):
@@ -147,6 +147,20 @@ class LabelTest(unittest.TestCase):
     def test_labels(self):
         self.assertRegex(new_label("my-board", "lead"), re.compile(r"^board-my-board-lead-[0-9a-f]{4}$"))
         self.assertRegex(new_label("my-board", "worker"), re.compile(r"^board-my-board-[0-9a-f]{4}$"))
+
+
+
+class ReviewFixLaunchTest(unittest.TestCase):
+    def test_absolute_read_rules_use_double_slash(self):
+        allow = lead_settings(None, Path("/h/b"))["permissions"]["allow"]
+        self.assertIn("Read(//h/b/**)", allow)
+        self.assertNotIn("Read(/h/b/**)", allow)
+        argv = oneshot_argv(board(), "p", Path("/h/oneshot-settings.json"))
+        self.assertIn("Read(//b/board.toml)", after(argv, "--allowedTools"))
+
+    def test_workers_may_read_the_skill(self):
+        argv = worker_argv(board(), WorkerSlot("sonnet", 1), "L")
+        self.assertIn("Read(~/.claude/skills/blackboard/**)", after(argv, "--allowedTools").split(","))
 
 
 if __name__ == "__main__":

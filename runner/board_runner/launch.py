@@ -18,6 +18,12 @@ SKILL_DIR = "~/.claude/skills/blackboard"
 LEAD_ALLOW = [MEMORY_TOOLS, "Bash(date*)", "Bash(openssl rand*)", f"Read({SKILL_DIR}/**)"]
 
 
+def read_rule(path: Path | str) -> str:
+    """A Read permission rule for a path. An absolute path needs a leading // in Claude Code's rule syntax."""
+    text = str(path)
+    return f"Read(/{text})" if text.startswith("/") else f"Read({text})"
+
+
 def new_label(board: str, role: Literal["lead", "worker"]) -> str:
     hex4 = secrets.token_hex(2)
     return f"board-{board}-lead-{hex4}" if role == "lead" else f"board-{board}-{hex4}"
@@ -47,8 +53,9 @@ def _budget_args(bf: BoardFile, model: str) -> list[str]:
 def worker_argv(bf: BoardFile, slot: WorkerSlot, label: str) -> list[str]:
     model_args, _ = model_args_env(slot.model, {})
     allow = list(bf.allow)
-    if MEMORY_TOOLS not in allow:
-        allow.append(MEMORY_TOOLS)
+    for rule in (MEMORY_TOOLS, f"Read({SKILL_DIR}/**)"):
+        if rule not in allow:
+            allow.append(rule)
     return [
         "claude",
         "-p",
@@ -111,7 +118,7 @@ def lead_env(bf: BoardFile, base_env: Mapping[str, str] | None = None) -> dict[s
 
 def lead_settings(hook_argv: list[str] | None, runner_home: Path) -> dict:
     """Settings for the lead (with the Stop hook) or for one-shot runs (hook_argv None: no hooks at all)."""
-    settings: dict = {"permissions": {"allow": [*LEAD_ALLOW, f"Read({runner_home}/**)"]}}
+    settings: dict = {"permissions": {"allow": [*LEAD_ALLOW, read_rule(f"{runner_home}/**")]}}
     if hook_argv is not None:
         settings["hooks"] = {"Stop": [{"hooks": [{"type": "command", "command": shlex.join(hook_argv)}]}]}
     return settings
@@ -130,7 +137,7 @@ def oneshot_argv(bf: BoardFile, prompt: str, settings_path: Path) -> list[str]:
         "--settings",
         str(settings_path),
         "--allowedTools",
-        ",".join([*LEAD_ALLOW, f"Read({bf.path})"]),
+        ",".join([*LEAD_ALLOW, read_rule(bf.path)]),
         "--max-turns",
         str(bf.max_turns),
         *model_args,

@@ -29,15 +29,17 @@ class FakeTmux:
         self.killed = []
         self.pane = EMPTY_PANE
         self.missing = False
+        self.new_session_envs = []
 
     def has_session(self, name):
         if self.missing:
             raise FileNotFoundError("tmux")
         return self.alive
 
-    def new_session(self, name, cwd, argv):
+    def new_session(self, name, cwd, argv, env=None):
         self.alive = True
         self.new_sessions.append(argv)
+        self.new_session_envs.append(env or {})
 
     def send_line(self, name, text):
         self.sent.append(text)
@@ -106,6 +108,8 @@ class Harness:
         self.oneshots = []
         self.ps = ps or {}
         self.killed_pids = []
+        self.group_kills = []
+        self.popen_kwargs = []
         self.script = []
         self.steps = 0
         self.runner = Runner(
@@ -117,8 +121,15 @@ class Harness:
             sleep=self.sleep,
             run=self.run,
             kill_pid=lambda pid, sig: self.killed_pids.append(pid),
+            kill_group=self.kill_group,
             runner_script=Path("/r/board-runner"),
         )
+
+    def kill_group(self, pid, sig):
+        self.group_kills.append((pid, sig))
+        for proc in self.procs:
+            if proc.pid == pid:
+                proc.killed = True
 
     def close(self):
         self.tmp.cleanup()
@@ -136,10 +147,14 @@ class Harness:
         self.script.sort(key=lambda item: item[0])
 
     def popen(self, argv, cwd=None, env=None, stdout=None, stderr=None, **kwargs):
+        self.popen_kwargs.append((argv, kwargs))
         is_worker = "-p" in argv and argv[argv.index("-p") + 1].startswith("/blackboard work")
         if is_worker and stdout is not None:
             text = self.worker_texts.pop(0) if self.worker_texts else "BOARD-WORK none"
-            stdout.write(result_json(text))
+            if isinstance(text, bytes):
+                stdout.buffer.write(text)
+            else:
+                stdout.write(result_json(text))
             stdout.flush()
         proc = FakeProc(argv, self.clock.now + (self.worker_seconds if is_worker else 1), self.clock)
         self.procs.append(proc)
@@ -318,6 +333,110 @@ class RunnerTest(unittest.TestCase):
         sends = [s for s in h.tmux.sent if "measured" in s]
         self.assertEqual(len(sends), 1)
         self.assertIn("measured r1 pass output=", sends[0])
+
+    def test_children_get_their_own_process_group(self):
+        bf = board(workers=(WorkerSlot("haiku", 1),), measure=Measure("./m.sh", 0, 30, False))
+        h = self.harness(bf=bf)
+        h.worker_seconds = 10_000
+        h.at(5, lambda: h.lead_says("BOARD-LEAD candidate r1 free=1 open=1"))
+        h.at(300, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        kinds = set()
+        for argv, kwargs in h.popen_kwargs:
+            self.assertTrue(kwargs.get("start_new_session"), argv)
+            kinds.add("measure" if argv[:2] == ["bash", "-c"] else argv[argv.index("-p") + 1].split()[1])
+        self.assertEqual(kinds, {"work", "measure", "release"})
+
+    def test_timeout_kills_the_process_group(self):
+        import signal as sig
+
+        bf = board(workers=(WorkerSlot("haiku", 1),))
+        h = self.harness(bf=bf)
+        h.worker_seconds = 10_000
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        worker = h.workers()[0]
+        self.assertIn((worker.pid, sig.SIGTERM), h.group_kills)
+
+    def test_double_interrupt_kills_the_measurement(self):
+        bf = board(measure=Measure("./m.sh", 0, 30, False))
+        h = self.harness(bf=bf)
+        h.at(5, lambda: h.lead_says("BOARD-LEAD candidate r1 free=0 open=0"))
+
+        def slow_measure():
+            for proc in h.procs:
+                if proc.argv[:2] == ["bash", "-c"]:
+                    proc.finish_at = 10_000
+
+        h.at(5.5, slow_measure)
+        h.at(20, h.runner.interrupt)
+        h.at(21, h.runner.interrupt)
+        self.assertEqual(h.runner.run(takeover=False), 0)
+        measure = [p for p in h.procs if p.argv[:2] == ["bash", "-c"]][0]
+        self.assertTrue(measure.killed)
+
+    def test_lead_session_gone_exits_1(self):
+        h = self.harness()
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=0 open=0"))
+        h.at(50, lambda: setattr(h.tmux, "alive", False))
+        self.assertEqual(h.runner.run(takeover=False), 1)
+        self.assertLess(h.clock.now, 200)
+
+    def test_typing_seen_between_sends_blocks_the_next_send(self):
+        h = self.harness(bf=board(workers=(WorkerSlot("haiku", 120),)))
+        h.worker_seconds = 110
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(100, lambda: setattr(h.tmux, "pane", TYPED_PANE))
+        h.at(110, lambda: setattr(h.tmux, "pane", EMPTY_PANE))  # the person submitted a message
+        h.at(135, lambda: self.assertEqual([s for s in h.tmux.sent if s.startswith("/blackboard")], []))
+        h.at(150, lambda: self.assertEqual(len([s for s in h.tmux.sent if s.startswith("/blackboard")]), 1))
+        h.at(151, lambda: h.lead_says("BOARD-LEAD done"))
+        self.assertEqual(h.runner.run(takeover=False), 0)
+
+    def test_unknown_screen_blocks_sends(self):
+        h = self.harness()
+        h.tmux.pane = "a menu with no prompt marker"
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=0 open=0"))
+        h.at(1300, lambda: self.assertEqual([s for s in h.tmux.sent if s.startswith("/blackboard")], []))
+        h.at(1301, lambda: setattr(h.tmux, "pane", EMPTY_PANE))
+        h.at(1400, lambda: h.lead_says("BOARD-LEAD done"))
+        self.assertEqual(h.runner.run(takeover=False), 0)
+
+    def test_second_runner_is_refused(self):
+        import fcntl
+
+        h = self.harness()
+        lock = (h.board_dir / "lock").open("w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            self.assertEqual(h.runner.run(takeover=False), 2)
+            self.assertEqual(h.oneshots, [])
+        finally:
+            lock.close()
+
+    def test_undecodable_worker_output_is_lost(self):
+        h = self.harness(bf=board(workers=(WorkerSlot("haiku", 120),)))
+        h.worker_texts = [b'{"result": "\xff\xfe broken']
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        self.assertEqual(h.runner.run(takeover=False), 0)
+
+    def test_hook_runs_with_this_python_and_home(self):
+        import sys
+
+        h = self.harness()
+        h.at(5, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        command = json.loads((h.board_dir / "lead-settings.json").read_text())["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertTrue(command.startswith(sys.executable), command)
+        self.assertIn(f"--home {h.home}", command)
+
+    def test_ollama_lead_gets_its_environment(self):
+        h = self.harness(bf=board(lead_model="ollama:glm-5.3"))
+        h.at(5, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        self.assertEqual(h.tmux.new_session_envs[0].get("ANTHROPIC_AUTH_TOKEN"), "ollama")
 
 
 class MainTest(unittest.TestCase):
