@@ -5,6 +5,8 @@ from pathlib import Path
 from board_runner.board_file import BoardFile, Measure, WorkerSlot
 from board_runner.launch import (
     LEAD_ALLOW,
+    SKILL_DIR,
+    dir_read_rules,
     lead_argv,
     lead_prompt,
     lead_settings,
@@ -53,7 +55,7 @@ class WorkerArgvTest(unittest.TestCase):
         self.assertEqual(after(argv, "-p"), "/blackboard work b label=L runner")
         self.assertEqual(after(argv, "--output-format"), "json")
         self.assertEqual(after(argv, "--permission-mode"), "dontAsk")
-        self.assertEqual(after(argv, "--allowedTools"), "Edit,Bash(python3 *),mcp__shared-memory__*,Read(~/.claude/skills/blackboard/**)")
+        self.assertEqual(after(argv, "--allowedTools"), ",".join(["Edit", "Bash(python3 *)", "mcp__shared-memory__*", *dir_read_rules(SKILL_DIR)]))
         self.assertEqual(after(argv, "--disallowedTools"), "Bash(git push*)")
         self.assertEqual(after(argv, "--max-turns"), "200")
         self.assertEqual(after(argv, "--model"), "sonnet")
@@ -160,7 +162,43 @@ class ReviewFixLaunchTest(unittest.TestCase):
 
     def test_workers_may_read_the_skill(self):
         argv = worker_argv(board(), WorkerSlot("sonnet", 1), "L")
-        self.assertIn("Read(~/.claude/skills/blackboard/**)", after(argv, "--allowedTools").split(","))
+        allowed = after(argv, "--allowedTools").split(",")
+        for rule in dir_read_rules(SKILL_DIR):
+            self.assertIn(rule, allowed)
+
+
+
+class SymlinkReadRulesTest(unittest.TestCase):
+    def test_symlinked_dir_gets_rules_for_link_and_target(self):
+        import tempfile
+
+        from board_runner.launch import dir_read_rules
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "real-skill"
+            target.mkdir()
+            link = Path(tmp) / "link"
+            link.symlink_to(target)
+            rules = dir_read_rules(str(link))
+            self.assertIn(f"Read(/{link}/**)", rules)
+            self.assertIn(f"Read(/{target.resolve()}/**)", rules)
+
+    def test_plain_dir_gets_one_rule(self):
+        from board_runner.launch import dir_read_rules
+
+        self.assertEqual(dir_read_rules("/no/such/dir"), ["Read(//no/such/dir/**)"])
+
+    def test_skill_rules_reach_lead_oneshot_and_workers(self):
+        from board_runner.launch import SKILL_DIR, dir_read_rules
+
+        expected = dir_read_rules(SKILL_DIR)
+        settings = lead_settings(None, Path("/h"))["permissions"]["allow"]
+        workers = after(worker_argv(board(), WorkerSlot("sonnet", 1), "L"), "--allowedTools").split(",")
+        oneshot = after(oneshot_argv(board(), "p", Path("/s.json")), "--allowedTools").split(",")
+        for rule in expected:
+            self.assertIn(rule, settings)
+            self.assertIn(rule, workers)
+            self.assertIn(rule, oneshot)
 
 
 if __name__ == "__main__":

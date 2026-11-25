@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from collections.abc import Callable, Mapping
@@ -9,6 +10,9 @@ from pathlib import Path
 
 _PROMPT_MARKERS = (">", "❯")
 _BOX_EDGES = "│┃|"
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_DIM = "\x1b[2m"
+TRUST_DIALOG = "trust this folder"
 
 
 class Tmux:
@@ -40,18 +44,27 @@ class Tmux:
             self._tmux("send-keys", "-t", f"={name}:", "Enter")
 
     def capture(self, name: str) -> str:
-        return self._tmux("capture-pane", "-p", "-t", f"={name}:").stdout
+        """The pane's text with its escape codes (-e), so input_line can tell a dim placeholder from typed text."""
+        return self._tmux("capture-pane", "-p", "-e", "-t", f"={name}:").stdout
 
     def kill_session(self, name: str) -> None:
         self._tmux("kill-session", "-t", f"={name}", check=False)
 
 
 def input_line(capture: str) -> str | None:
-    """The text in Claude Code's input box: what follows the prompt marker on the lowest prompt line. None when no
-    prompt is visible (a menu, a changed screen): the caller must treat that as "do not type"."""
+    """The text in Claude Code's input box: what follows the prompt marker on the lowest prompt line.
+
+    Returns "" for an empty box, including one showing Claude Code's dim placeholder ("Try ..."), and None when no
+    prompt is visible (a menu or dialog, or a changed screen): the caller must treat None as "do not type".
+    """
     for line in reversed(capture.splitlines()):
-        stripped = line.strip().strip(_BOX_EDGES).strip()
+        line = line.replace("\xa0", " ")  # Claude Code puts a no-break space after the marker
+        plain = _ANSI.sub("", line).strip().strip(_BOX_EDGES).strip()
         for marker in _PROMPT_MARKERS:
-            if stripped.startswith(marker + " ") or stripped == marker:
-                return stripped[len(marker):].strip().strip(_BOX_EDGES).strip()
+            if not (plain.startswith(marker + " ") or plain == marker):
+                continue
+            after_marker = line.split(marker, 1)[1] if marker in line else ""
+            if after_marker.lstrip(" ").startswith(_DIM):
+                return ""  # the placeholder is drawn dim
+            return plain[len(marker):].strip().strip(_BOX_EDGES).strip()
     return None

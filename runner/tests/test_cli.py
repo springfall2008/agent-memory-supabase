@@ -432,6 +432,16 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(command.startswith(sys.executable), command)
         self.assertIn(f"--home {h.home}", command)
 
+    def test_trust_dialog_warns_once(self):
+        err = io.StringIO()
+        h = self.harness()
+        h.runner.err = err
+        h.tmux.pane = "Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n"
+        h.at(30, lambda: setattr(h.tmux, "pane", EMPTY_PANE))
+        h.at(40, lambda: h.lead_says("BOARD-LEAD done"))
+        self.assertEqual(h.runner.run(takeover=False), 0)
+        self.assertEqual(err.getvalue().count("folder trust dialog"), 1)
+
     def test_ollama_lead_gets_its_environment(self):
         h = self.harness(bf=board(lead_model="ollama:glm-5.3"))
         h.at(5, lambda: h.lead_says("BOARD-LEAD done"))

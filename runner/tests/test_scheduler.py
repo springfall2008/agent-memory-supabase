@@ -267,6 +267,19 @@ class SchedulerTest(unittest.TestCase):
         s.on_event(Tick(), 2 * 20 * 60)
         self.assertEqual(s.on_event(Interrupt(), 2 * 20 * 60 + 1), [Shutdown(False)])
 
+    def test_five_failed_measurements_stop_the_runner(self):
+        s = self.make(measure=Measure("./m.sh", 0, 30, False))
+        t = 1
+        for i in range(5):
+            s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref=f"r{i}")), t)
+            actions = s.on_event(MeasureDone(f"r{i}", False, Path(f"/m/{i}.log")), t + 1)
+            if i < 4:
+                self.send(s, t + 1)
+            t += 10
+        self.assertTrue(any("5 failed measurements" in w.message for w in warns(actions)))
+        self.assertIsNone(s.poll_send(t))
+        self.assertIn(Shutdown(False), actions)
+
     def test_repeated_measured_candidate_warns(self):
         s = self.make(measure=Measure("./m.sh", 0, 30, False))
         s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref="r")), 1)

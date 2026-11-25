@@ -38,7 +38,7 @@ from .scheduler import (
     Warn,
     WorkerExit,
 )
-from .tmux import Tmux, input_line
+from .tmux import TRUST_DIALOG, Tmux, input_line
 
 TYPING_QUIET_SECONDS = 30
 KILL_GRACE_SECONDS = 10
@@ -84,6 +84,7 @@ class Runner:
         self.lock_handle = None
         self.lead_dead = False
         self.last_lead_check = 0.0
+        self.trust_warned = False
         self.runner_script = runner_script
         self.out = out
         self.err = err
@@ -355,9 +356,17 @@ class Runner:
         if self.lead_dead:
             return
         try:
-            current = input_line(self.tmux.capture(self.session))
+            pane = self.tmux.capture(self.session)
         except (OSError, subprocess.SubprocessError):
-            current = None
+            pane = ""
+        if TRUST_DIALOG in pane and not self.trust_warned:
+            self.trust_warned = True
+            self.log(
+                f"The lead is waiting at Claude Code's folder trust dialog: attach with tmux attach -t {self.session} "
+                "and choose to trust the workspace (runs in that folder are trusted from then on).",
+                warn=True,
+            )
+        current = input_line(pane) if pane else None
         if current != self.typing_value or current is None:
             self.typing_value = current
             self.typing_since = now

@@ -27,7 +27,7 @@ class TmuxTest(unittest.TestCase):
             [
                 ["tmux", "send-keys", "-t", "=board-b:", "-l", "/blackboard lead b label=L runner"],
                 ["tmux", "send-keys", "-t", "=board-b:", "Enter"],
-                ["tmux", "capture-pane", "-p", "-t", "=board-b:"],
+                ["tmux", "capture-pane", "-p", "-e", "-t", "=board-b:"],
             ],
         )
 
@@ -47,7 +47,7 @@ class TmuxTest(unittest.TestCase):
     def test_capture(self):
         run = Recorder(stdout="pane text")
         self.assertEqual(Tmux(run).capture("board-b"), "pane text")
-        self.assertEqual(run.calls[0], ["tmux", "capture-pane", "-p", "-t", "=board-b:"])
+        self.assertEqual(run.calls[0], ["tmux", "capture-pane", "-p", "-e", "-t", "=board-b:"])
 
 
 class InputLineTest(unittest.TestCase):
@@ -72,7 +72,7 @@ class ReviewFixTmuxTest(unittest.TestCase):
         tmux.capture("board-b")
         tmux.kill_session("board-b")
         self.assertEqual(run.calls[0], ["tmux", "has-session", "-t", "=board-b"])
-        self.assertEqual(run.calls[1], ["tmux", "capture-pane", "-p", "-t", "=board-b:"])
+        self.assertEqual(run.calls[1], ["tmux", "capture-pane", "-p", "-e", "-t", "=board-b:"])
         self.assertEqual(run.calls[2], ["tmux", "kill-session", "-t", "=board-b"])
 
     def test_send_line_pauses_and_retries_enter_when_text_stays(self):

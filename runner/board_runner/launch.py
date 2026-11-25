@@ -15,13 +15,28 @@ OLLAMA_PREFIX = "ollama:"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 MEMORY_TOOLS = "mcp__shared-memory__*"
 SKILL_DIR = "~/.claude/skills/blackboard"
-LEAD_ALLOW = [MEMORY_TOOLS, "Bash(date*)", "Bash(openssl rand*)", f"Read({SKILL_DIR}/**)"]
+LEAD_ALLOW = [MEMORY_TOOLS, "Bash(date*)", "Bash(openssl rand*)"]
 
 
 def read_rule(path: Path | str) -> str:
     """A Read permission rule for a path. An absolute path needs a leading // in Claude Code's rule syntax."""
     text = str(path)
     return f"Read(/{text})" if text.startswith("/") else f"Read({text})"
+
+
+def dir_read_rules(path: Path | str) -> list[str]:
+    """Read rules for a directory tree. Claude Code checks a path reached through a symlink against both the link and
+    its target, so a symlinked directory (the usual skill install) needs a rule for each."""
+    expanded = Path(path).expanduser()
+    rules = [read_rule(f"{expanded}/**")]
+    resolved = expanded.resolve()
+    if resolved != expanded:
+        rules.append(read_rule(f"{resolved}/**"))
+    return rules
+
+
+def lead_allow() -> list[str]:
+    return [*LEAD_ALLOW, *dir_read_rules(SKILL_DIR)]
 
 
 def new_label(board: str, role: Literal["lead", "worker"]) -> str:
@@ -53,7 +68,7 @@ def _budget_args(bf: BoardFile, model: str) -> list[str]:
 def worker_argv(bf: BoardFile, slot: WorkerSlot, label: str) -> list[str]:
     model_args, _ = model_args_env(slot.model, {})
     allow = list(bf.allow)
-    for rule in (MEMORY_TOOLS, f"Read({SKILL_DIR}/**)"):
+    for rule in (MEMORY_TOOLS, *dir_read_rules(SKILL_DIR)):
         if rule not in allow:
             allow.append(rule)
     return [
@@ -118,7 +133,7 @@ def lead_env(bf: BoardFile, base_env: Mapping[str, str] | None = None) -> dict[s
 
 def lead_settings(hook_argv: list[str] | None, runner_home: Path) -> dict:
     """Settings for the lead (with the Stop hook) or for one-shot runs (hook_argv None: no hooks at all)."""
-    settings: dict = {"permissions": {"allow": [*LEAD_ALLOW, read_rule(f"{runner_home}/**")]}}
+    settings: dict = {"permissions": {"allow": [*lead_allow(), *dir_read_rules(runner_home)]}}
     if hook_argv is not None:
         settings["hooks"] = {"Stop": [{"hooks": [{"type": "command", "command": shlex.join(hook_argv)}]}]}
     return settings
@@ -137,7 +152,7 @@ def oneshot_argv(bf: BoardFile, prompt: str, settings_path: Path) -> list[str]:
         "--settings",
         str(settings_path),
         "--allowedTools",
-        ",".join([*LEAD_ALLOW, read_rule(bf.path)]),
+        ",".join([*lead_allow(), read_rule(bf.path)]),
         "--max-turns",
         str(bf.max_turns),
         *model_args,

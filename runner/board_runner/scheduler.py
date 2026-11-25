@@ -15,6 +15,7 @@ from .protocol import LeadResult, WorkResult
 
 BACKOFF_SECONDS = 60
 LEAD_BUSY_WARN_SECONDS = 15 * 60
+MAX_FAILED_MEASUREMENTS = 5
 
 
 # --- events --------------------------------------------------------------
@@ -99,6 +100,7 @@ class _Measurement:
     done: set[str] = field(default_factory=set)
     results: list[tuple[str, bool, Path]] = field(default_factory=list)
     passed_sent: bool = False
+    failures: int = 0
 
 
 class Scheduler:
@@ -239,6 +241,17 @@ class Scheduler:
         m = self.measure
         m.current = None
         m.done.add(event.ref)
+        if not event.passed:
+            m.failures += 1
+            if m.failures >= MAX_FAILED_MEASUREMENTS:
+                # Candidates cost no intents, so a lead that keeps proposing could loop for ever: stop here instead.
+                self.draining = True
+                return [
+                    Warn(
+                        f"{MAX_FAILED_MEASUREMENTS} failed measurements: stopping the runner and leaving the board "
+                        "running. Check the measurement and the candidates, then run again."
+                    )
+                ]
         m.results.append((event.ref, event.passed, event.output))
         return self._maybe_start_measure() + self._fill(now)
 

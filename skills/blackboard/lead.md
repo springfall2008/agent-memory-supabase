@@ -100,7 +100,11 @@ The command says `measure` when the board has a measurement that must confirm th
 - **Done becomes a proposal.** When the facts appear to meet Done when, do not conclude. Pick `<ref>`: what the proving
   facts name as the result, such as a branch, commit, path or value, with no spaces. Do the rest of the round as usual,
   then end with the `candidate` line.
-- **Never propose a `<ref>` that has already been measured.** A measurement fact for it, below, says so.
+- **`<ref>` is exactly the result that gets measured.** The runner passes it unchanged to the measurement command as
+  `BOARD_CANDIDATE`. Use the bare value, branch, commit or path, such as `38` rather than `n=38`, and never a name you
+  make up.
+- **Never propose a `<ref>` that has already been measured.** A measurement fact for it, below, says so. After a failed
+  measurement, plan work toward a different result. Do not rename the same result to measure it again.
 - **`measured <ref> pass output=<path>`.** Read the file at `<path>`. Store a fact with the work.md template:
   - `Fact for intent none: measurement of <ref> passed`, with the file's key lines as `Evidence:`;
   - tagged `verdict:confirmed`;
