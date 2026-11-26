@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertThrows } from '@std/assert';
-import { loadConfig } from '../../web/lib/config.ts';
+import { type Config, loadConfig } from '../../web/lib/config.ts';
 import { hostAllowed } from '../../web/lib/guard.ts';
+import { proxyApi } from '../../web/lib/proxy.ts';
 import { serveStatic } from '../../web/lib/static.ts';
 
 const SECRET = 'tok-secret-value-123';
@@ -179,4 +180,173 @@ Deno.test('serveStatic returns 404 for directories and missing files without lea
 Deno.test('serveStatic rejects a missing root rather than throwing', async () => {
   const res = await serveStatic('/nonexistent-root-dir-xyz', '/');
   assertEquals(res.status, 404);
+});
+
+const CFG: Config = {
+  apiUrl: 'https://abc.supabase.co/functions/v1/web-api',
+  token: SECRET,
+  runnerHome: '/home/u/.board-runner',
+  port: 8787,
+};
+
+type Call = { url: string; init?: RequestInit };
+
+function fakeFetch(respond: () => Response | Promise<Response>): { fn: typeof fetch; calls: Call[] } {
+  const calls: Call[] = [];
+  const fn = ((input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Promise.resolve().then(respond);
+  }) as typeof fetch;
+  return { fn, calls };
+}
+
+const jsonOk = () => Response.json({ ok: true });
+
+Deno.test('proxyApi adds the bearer, drops browser auth and cookies, and keeps the query string', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const req = new Request('http://localhost:8787/api/memories?tags=board%3Ax&limit=5', {
+    headers: {
+      authorization: 'Bearer browser-token',
+      cookie: 'a=b',
+      accept: 'application/json',
+      'x-other': 'nope',
+    },
+  });
+  const res = await proxyApi(req, CFG, fn);
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { ok: true });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, 'https://abc.supabase.co/functions/v1/web-api/memories?tags=board%3Ax&limit=5');
+  const headers = new Headers(calls[0].init?.headers);
+  assertEquals(headers.get('authorization'), `Bearer ${SECRET}`);
+  assertEquals(headers.get('accept'), 'application/json');
+  assertEquals(headers.get('cookie'), null);
+  assertEquals(headers.get('x-other'), null);
+  assertEquals(calls[0].init?.method, 'GET');
+  assertEquals(calls[0].init?.redirect, 'manual');
+});
+
+Deno.test('proxyApi allows each upstream route and tolerates a trailing slash on apiUrl', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const cfg = { ...CFG, apiUrl: `${CFG.apiUrl}/` };
+  for (const path of ['scopes', 'boards', 'graph', 'memories', 'memories/3f2a-0b9c']) {
+    const res = await proxyApi(new Request(`http://localhost:8787/api/${path}`), cfg, fn);
+    assertEquals(res.status, 200, path);
+    await res.body?.cancel();
+  }
+  assertEquals(calls.map((c) => c.url), [
+    `${CFG.apiUrl}/scopes`,
+    `${CFG.apiUrl}/boards`,
+    `${CFG.apiUrl}/graph`,
+    `${CFG.apiUrl}/memories`,
+    `${CFG.apiUrl}/memories/3f2a-0b9c`,
+  ]);
+});
+
+Deno.test('proxyApi 404s every path outside the allow-list without calling upstream', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const paths = [
+    '/api/..%2Fagent-memory',
+    '/api/%2e%2e/agent-memory',
+    '/api/memories/../x',
+    '/api/memories/%2e%2e',
+    '/api/memories/a%2Fb',
+    '/api/memories/a/b',
+    '/api/memories/',
+    '/api/other',
+    '/api/',
+    '/api',
+    '/api/scopes/extra',
+    '/api/agent-memory',
+  ];
+  for (const path of paths) {
+    const res = await proxyApi(new Request(`http://localhost:8787${path}`), CFG, fn);
+    assertEquals(res.status, 404, path);
+    assertEquals(await res.json(), { error: 'not found' }, path);
+  }
+  assertEquals(calls.length, 0);
+});
+
+Deno.test('proxyApi refuses non-GET methods with 405', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+    const res = await proxyApi(new Request('http://localhost:8787/api/memories', { method, body: '{}' }), CFG, fn);
+    assertEquals(res.status, 405, method);
+    await res.body?.cancel();
+  }
+  assertEquals(calls.length, 0);
+});
+
+Deno.test('proxyApi refuses cross-site requests but allows same-origin, same-site, none and absent', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const cross = await proxyApi(
+    new Request('http://localhost:8787/api/scopes', { headers: { 'sec-fetch-site': 'cross-site' } }),
+    CFG,
+    fn,
+  );
+  assertEquals(cross.status, 403);
+  assertEquals(await cross.json(), { error: 'cross-site request refused' });
+  assertEquals(calls.length, 0);
+
+  for (const site of ['same-origin', 'same-site', 'none']) {
+    const res = await proxyApi(
+      new Request('http://localhost:8787/api/scopes', { headers: { 'sec-fetch-site': site } }),
+      CFG,
+      fn,
+    );
+    assertEquals(res.status, 200, site);
+    await res.body?.cancel();
+  }
+  const bare = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(bare.status, 200);
+  await bare.body?.cancel();
+  assertEquals(calls.length, 4);
+});
+
+Deno.test('proxyApi passes an upstream error status and body through', async () => {
+  const { fn } = fakeFetch(() => Response.json({ error: 'invalid or missing token' }, { status: 401 }));
+  const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(res.status, 401);
+  assertEquals(await res.json(), { error: 'invalid or missing token' });
+});
+
+Deno.test('proxyApi turns a thrown fetch into 502 without leaking the token or url', async () => {
+  const { fn } = fakeFetch(() => {
+    throw new Error(`connect failed ${CFG.apiUrl} ${SECRET}`);
+  });
+  const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(res.status, 502);
+  const text = await res.text();
+  assertEquals(JSON.parse(text), { error: 'web-api unreachable' });
+  assert(!text.includes(SECRET) && !text.includes('supabase.co'));
+});
+
+Deno.test('proxyApi treats an upstream redirect as 502 and never follows it', async () => {
+  const { fn, calls } = fakeFetch(() =>
+    new Response(null, { status: 302, headers: { location: 'https://evil.example/' } })
+  );
+  const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(res.status, 502);
+  assertEquals(await res.json(), { error: 'web-api unreachable' });
+  assertEquals(res.headers.get('location'), null);
+  assertEquals(calls.length, 1);
+});
+
+Deno.test('proxyApi copies only content-type from the upstream headers', async () => {
+  const { fn } = fakeFetch(() =>
+    new Response('{"ok":true}', {
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer leak',
+        'set-cookie': 'sid=1',
+        'x-secret': 'v',
+      },
+    })
+  );
+  const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(res.headers.get('content-type'), 'application/json');
+  assertEquals(res.headers.get('authorization'), null);
+  assertEquals(res.headers.get('set-cookie'), null);
+  assertEquals(res.headers.get('x-secret'), null);
+  await res.body?.cancel();
 });
