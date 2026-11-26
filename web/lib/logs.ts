@@ -78,29 +78,38 @@ async function pastLineEnd(file: Deno.FsFile, from: number, size: number, cap: n
   return size;
 }
 
-/** Forward chunk from `start`: whole lines only, and the last unfinished line only once the worker has stopped. */
-async function forward(file: Deno.FsFile, size: number, start: number, cap: number, running: boolean) {
-  const end = Math.min(start + cap, size);
-  const buf = await readAt(file, start, end - start);
-  const nl = buf.lastIndexOf(NL);
-  if (end < size) {
-    if (nl >= 0) return { start, textEnd: start + nl + 1, next: start + nl + 1, cut: false };
-    const textEnd = start + wholeChars(buf);
-    return { start, textEnd, next: await pastLineEnd(file, end, size, cap), cut: true };
+/** Position just after the last newline in the file, or 0 when it has none. */
+async function lastLineEnd(file: Deno.FsFile, size: number): Promise<number> {
+  for (let end = size; end > 0;) {
+    const from = Math.max(0, end - RESULT_TAIL_BYTES);
+    const i = (await readAt(file, from, end - from)).lastIndexOf(NL);
+    if (i >= 0) return from + i + 1;
+    end = from;
   }
-  if (!running) return { start, textEnd: size, next: size, cut: false };
-  const through = nl >= 0 ? start + nl + 1 : start;
-  return { start, textEnd: through, next: through, cut: false };
+  return 0;
 }
 
-async function tail(file: Deno.FsFile, size: number, cap: number, running: boolean): Promise<Slice> {
-  const windowStart = Math.max(0, size - cap);
-  if (windowStart === 0) return await forward(file, size, 0, cap, running);
-  const buf = await readAt(file, windowStart, size - windowStart);
+/**
+ * Forward chunk from `start`, never past `eof`: whole lines, except a single line longer than the cap.
+ * `eof` is the end of the readable region, so a line still being written is never reached.
+ */
+async function forward(file: Deno.FsFile, eof: number, start: number, cap: number): Promise<Slice> {
+  const end = Math.min(start + cap, eof);
+  const buf = await readAt(file, start, end - start);
+  if (end === eof) return { start, textEnd: end, next: end, cut: false };
+  const nl = buf.lastIndexOf(NL);
+  if (nl >= 0) return { start, textEnd: start + nl + 1, next: start + nl + 1, cut: false };
+  const textEnd = start + wholeChars(buf);
+  return { start, textEnd, next: await pastLineEnd(file, end, eof, cap), cut: true };
+}
+
+async function tail(file: Deno.FsFile, eof: number, cap: number): Promise<Slice> {
+  const windowStart = Math.max(0, eof - cap);
+  if (windowStart === 0) return await forward(file, eof, 0, cap);
+  const buf = await readAt(file, windowStart, eof - windowStart);
   const nl = buf.indexOf(NL);
-  if (nl >= 0 && windowStart + nl + 1 < size) return await forward(file, size, windowStart + nl + 1, cap, running);
-  const from = charStart(buf, 0);
-  return { start: windowStart + from, textEnd: size, next: size, cut: true };
+  if (nl >= 0 && windowStart + nl + 1 < eof) return await forward(file, eof, windowStart + nl + 1, cap);
+  return { start: windowStart + charStart(buf, 0), textEnd: eof, next: eof, cut: true };
 }
 
 async function before(file: Deno.FsFile, n: number, cap: number): Promise<Slice> {
@@ -230,14 +239,18 @@ export async function serveLog(url: URL, runnerHome: string, chunkBytes = LOG_CH
 
   try {
     using file = await Deno.open(found.path, { read: true });
+    // Read the state before the size: a worker not listed by then has written everything the file will hold.
+    const listed = await listedRunning(boardDir, label);
     const size = (await file.stat()).size;
-    const running = await listedRunning(boardDir, label) && !(await finished(file, size));
-    const clamped = Math.min(offset, size);
+    const running = listed && !(await finished(file, size));
+    // While running, the last unterminated line is still being written, so no offset may point into it.
+    const eof = running ? await lastLineEnd(file, size) : size;
+    const clamped = Math.min(offset, eof);
     const slice = mode === 'tail'
-      ? await tail(file, size, chunkBytes, running)
+      ? await tail(file, eof, chunkBytes)
       : mode === 'before'
       ? await before(file, clamped, chunkBytes)
-      : await forward(file, size, clamped, chunkBytes, running);
+      : await forward(file, eof, clamped, chunkBytes);
     const text = decode(await readAt(file, slice.start, slice.textEnd - slice.start));
     const body: LogBody = { found: true, running, size, start: slice.start, next: slice.next, text, cut: slice.cut };
     const stderr = await readStderr(dir, found.base);

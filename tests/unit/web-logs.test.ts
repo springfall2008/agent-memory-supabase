@@ -465,3 +465,53 @@ Deno.test('the default chunk cap is 256 KiB and bounds the response', async () =
     assertEquals(body.size, 400000);
   });
 });
+
+Deno.test('while running, an over-cap unterminated line is withheld, then served from a whole-line start', async () => {
+  await withHome(async (home) => {
+    await state(home, [LABEL]);
+    await write(home, `0-${LABEL}.jsonl`, 'a\n' + 'x'.repeat(30));
+    const first = await get(home, '?from=2', 20);
+    assertEquals(first, { ...first, text: '', start: 2, next: 2, cut: false, running: true, size: 32 });
+
+    await write(home, `0-${LABEL}.jsonl`, 'a\n' + 'x'.repeat(30) + 'yyy\nz\n');
+    const second = await get(home, `?from=${first.next}`, 20);
+    assertEquals(second.start, 2);
+    assertEquals(second.text, 'x'.repeat(20));
+    assertEquals(second.cut, true);
+    assertEquals(second.next, 2 + 33 + 1);
+    const third = await get(home, `?from=${second.next}`, 20);
+    assertEquals(third.start, 36);
+    assertEquals(third.text, 'z\n');
+    assertEquals(third.cut, false);
+  });
+});
+
+Deno.test('while running, tail with an unterminated last line stops at the last newline', async () => {
+  await withHome(async (home) => {
+    await state(home, [LABEL]);
+    await write(home, `0-${LABEL}.jsonl`, 'p\n'.repeat(20) + 'x'.repeat(10));
+    const first = await get(home, '?tail=1', 20);
+    assertEquals(first.running, true);
+    assertEquals(first.next, 40);
+    assert(first.text.endsWith('\n'));
+    assert(!first.text.includes('x'));
+    assertEquals((await get(home, '?tail=1', 20)).next, 40);
+
+    await write(home, `0-${LABEL}.jsonl`, 'p\n'.repeat(20) + 'x'.repeat(10) + 'yy\n');
+    const second = await get(home, `?from=${first.next}`, 20);
+    assertEquals(second.start, 40);
+    assertEquals(second.text, 'x'.repeat(10) + 'yy\n');
+  });
+});
+
+Deno.test('while running, tail and before with one huge unterminated line withhold it', async () => {
+  await withHome(async (home) => {
+    await state(home, [LABEL]);
+    await write(home, `0-${LABEL}.jsonl`, 'x'.repeat(100));
+    const tailed = await get(home, '?tail=1', 20);
+    assertEquals(tailed, { ...tailed, text: '', start: 0, next: 0, cut: false });
+    const earlier = await get(home, '?before=100', 20);
+    assertEquals(earlier.next, 0);
+    assertEquals(earlier.text, '');
+  });
+});
