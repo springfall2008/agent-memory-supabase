@@ -93,6 +93,17 @@ Deno.test("the Why line starts exactly with the lead's person-intent marker", ()
   assertEquals(why.startsWith(PERSON_INTENT_MARKER), true);
 });
 
+Deno.test('the skill names the same person-intent marker the server writes', async () => {
+  // The lead recognises a person's intent by this prefix, so the skill and the server must not drift apart.
+  const quoted = '`' + PERSON_INTENT_MARKER.trimEnd() + '`';
+  for (const file of ['lead.md', 'SKILL.md']) {
+    const text = await Deno.readTextFile(new URL(`../../skills/blackboard/${file}`, import.meta.url));
+    assertEquals(text.includes(quoted), true, `${file} names ${quoted}`);
+  }
+  const skill = await Deno.readTextFile(new URL('../../skills/blackboard/SKILL.md', import.meta.url));
+  assertEquals(skill.split('\n').some((l) => l.trim().startsWith(PERSON_INTENT_MARKER)), true, 'SKILL.md template');
+});
+
 const GOAL = 'Goal: make it fast\r\n' +
   'Done when: p95 under 10 ms\n' +
   'Max open intents: 3\n' +

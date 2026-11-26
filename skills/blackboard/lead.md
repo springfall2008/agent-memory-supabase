@@ -134,13 +134,13 @@ editing it, for example "if 20% is out of reach, 15% is acceptable, as long as X
 - **Without `measure`.** If the facts meet the fallback target, do Done instead of Unreachable or the intent limit stop.
   The conclusion's `Done when:` line gives the amended target, and its `Shown by:` cites the amendment's id beside the
   proving facts.
-- **With `measure`.** The runner's measurement stays the arbiter of Done: never conclude Done on an amended target. When
-  the facts meet only the fallback, propose that result as a candidate before stopping, and the rule that an unmeasured
-  candidate comes first then has it measured. If that measurement fails the goal's own threshold (a
-  `measurement of <ref> failed` fact shows the result) and the facts meet the fallback, stop the board as Unreachable
-  does, with a conclusion whose first line ends `Stopped: amended target met (amendment <id>)`. Its `Shown by:` gives
-  the measured result and the facts behind it, and it is linked `derived-from` those facts. In runner mode, end with the
-  same last line as Unreachable.
+- **With `measure`.** The runner's measurement stays the arbiter of Done: never conclude Done on an amended target. Once
+  the goal's own target is out of reach and the facts meet only the fallback, propose that result as a candidate before
+  stopping, and the rule that an unmeasured candidate comes first then has it measured. If that measurement fails the
+  goal's own threshold (a `measurement of <ref> failed` fact shows the result) and the facts meet the fallback, stop the
+  board as Unreachable does, with a conclusion whose first line ends `Stopped: amended target met (amendment <id>)`. Its
+  `Shown by:` gives the measured result and the facts behind it, and it is linked `derived-from` those facts. In runner
+  mode, end with the same last line as Unreachable.
 
 ## When the board is paused
 

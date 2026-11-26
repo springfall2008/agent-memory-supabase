@@ -117,6 +117,18 @@ export function controlDone(what, before, after) {
 }
 
 /**
+ * The goal's state named by a control the server refused because the board had moved on (`Board is <state>`), or
+ * null for any other error. `unknown` is the server's word for a goal with no state tag.
+ * @param {string} error
+ * @returns {{ state: string | null } | null}
+ */
+export function refusedState(error) {
+  const m = /^Board is ([a-z][a-z-]*)$/.exec(error);
+  if (!m) return null;
+  return { state: m[1] === 'unknown' ? null : m[1] };
+}
+
+/**
  * @typedef {{ id: string; tags: string[]; createdAt: string; snippet?: string; content?: string }} AmendmentNode
  */
 

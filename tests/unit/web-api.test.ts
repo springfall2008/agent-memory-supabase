@@ -622,6 +622,26 @@ Deno.test('POST /intents from a fact links derived-from it and says so in Why', 
   assertEquals(w[1].args, [NEW_ID, FACT_ID, 'derived-from']);
 });
 
+Deno.test('POST /intents from a fact uses the stored id, not the request text, in Why and the link', async () => {
+  // The database matches a uuid whatever its case; the intent must name the fact as stored.
+  const LETTERS_FACT = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  class LooseIds extends BoardFake {
+    override get(id: string) {
+      return Promise.resolve(this.mems.find((m) => m.id === id.toLowerCase()) ?? null);
+    }
+  }
+  const s = new LooseIds('running', [boardMem(LETTERS_FACT, 'fact', ['verdict:confirmed'])]);
+  const r = await post(s, '/intents', { scope: 's1', board: 'b', text: 't', from: LETTERS_FACT.toUpperCase() });
+  assertEquals(r.status, 201);
+  await r.json();
+  const w = s.writes();
+  assertEquals(
+    (w[0].args[1] as StoreRequest).content.split('\n')[1],
+    `Why: added by pat from the web UI; building on fact ${LETTERS_FACT}`,
+  );
+  assertEquals(w[1].args, [NEW_ID, LETTERS_FACT, 'derived-from']);
+});
+
 Deno.test('POST /intents from a non-fact is 400; from an off-board memory is 404', async () => {
   const s = new BoardFake();
   const r = await post(s, '/intents', { scope: 's1', board: 'b', text: 't', from: HINT_ID });
@@ -729,7 +749,7 @@ Deno.test('maxIntents rewrites only the Max intents line', async () => {
 
 Deno.test('maxIntents must be a positive integer or "none"', async () => {
   const s = new BoardFake();
-  for (const v of [0, -1, 1.5, 'lots', '5', null, true]) {
+  for (const v of [0, -1, 1.5, 'lots', '5', null, true, 2 ** 53, 1e300]) {
     const r = await post(s, '/boards/control', { scope: 's1', board: 'b', maxIntents: v });
     assertEquals(r.status, 400, String(v));
     await r.json();

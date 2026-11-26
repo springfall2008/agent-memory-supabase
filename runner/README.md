@@ -33,9 +33,11 @@ runner/board-runner status boards/my-board.toml
   The runner only sends a command after your input box has been empty for 30 seconds.
 - **Pause commands to the lead:** `touch ~/.board-runner/<board>/hold`. Delete the file to resume.
 - **A paused board:** when the lead ends a round with `BOARD-LEAD paused`, the runner keeps running, keeps filling
-  worker slots from `free`, and asks the lead for a round every 2 minutes instead of every `round_every_minutes`, so a
-  resume is seen quickly. The web UI's Pause lead and Resume lead set this state, and its Stop and Restart set and clear
-  `state:stopped`; Restart only changes the goal, so run `board-runner run` again to start workers.
+  worker slots from `free`, and asks the lead for a round every 2 minutes (or every `round_every_minutes`, if that is
+  shorter), so a resume is seen quickly. A measurement that finishes meanwhile waits for the first round after the
+  resume, because a paused lead writes nothing. The web UI's Pause lead and Resume lead set this state, and its Stop and
+  Restart set and clear `state:stopped`; Restart only changes the goal, so run `board-runner run` again to start
+  workers.
 - **Ctrl-C once:** start no more workers, let the running ones finish, then exit. The board stays running, so a later
   `run` carries on with it. **Ctrl-C twice:** kill the workers now; their claims lapse after `claim_minutes`.
 - **The lead needs you:** if a lead turn ends without a `BOARD-LEAD` line, for example because the lead asked you

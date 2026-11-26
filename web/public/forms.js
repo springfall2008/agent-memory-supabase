@@ -170,8 +170,8 @@ function intentForm(m, ctx, hooks) {
   return form;
 }
 
-/** @param {WriteCtx} ctx @param {Hooks} hooks */
-function amendmentForm(ctx, hooks) {
+/** @param {WriteCtx} ctx @param {Hooks} hooks @param {() => void} added called once the new amendment is drawn */
+function amendmentForm(ctx, hooks, added) {
   const text = textField('Amendment', {
     multiline: true,
     max: TEXT_MAX,
@@ -185,34 +185,44 @@ function amendmentForm(ctx, hooks) {
       submit: 'Add amendment',
       path: '/amendments',
       body: ([t]) => (t ? { scope: ctx.scope, board: ctx.board, text: t } : EMPTY),
+      // The list moves once the poll that follows the write has drawn the new amendment.
+      after: (polled) => polled.then(() => hooks.live() && added()),
     },
     ctx,
     hooks,
   );
 }
 
-/** The board's amendments from the shown graph, each opening in the drawer. @param {WriteCtx} ctx @param {Hooks} hooks */
+/**
+ * The board's amendments from the shown graph, each opening in the drawer; `refresh` redraws it from the graph.
+ * @param {WriteCtx} ctx
+ * @param {Hooks} hooks
+ * @returns {{ el: HTMLElement; refresh(): void }}
+ */
 function amendmentList(ctx, hooks) {
   const box = h('section', 'drawer-amendments');
-  box.append(h('h3', 'write-title', 'Amendments'));
-  const list = amendmentsOf(ctx.nodes());
-  if (list.length === 0) box.append(h('p', 'note', 'None yet.'));
-  for (const n of list) {
-    const text = n.snippet ?? n.content ?? '';
-    const b = h('button', 'secondary drawer-cite');
-    b.setAttribute('type', 'button');
-    const parts = h('span', 'cite-text');
-    const from = field(text, 'From');
-    parts.append(
-      h('span', 'cite-result', shortName(text).full),
-      h('span', 'cite-detail', `${from ? `From ${from} · ` : ''}${new Date(n.createdAt).toLocaleString()}`),
-    );
-    b.append(parts);
-    b.title = n.id;
-    b.addEventListener('click', () => hooks.open(n.id));
-    box.append(b);
-  }
-  return box;
+  const refresh = () => {
+    box.replaceChildren(h('h3', 'write-title', 'Amendments'));
+    const list = amendmentsOf(ctx.nodes());
+    if (list.length === 0) box.append(h('p', 'note', 'None yet.'));
+    for (const n of list) {
+      const text = n.snippet ?? n.content ?? '';
+      const b = h('button', 'secondary drawer-cite');
+      b.setAttribute('type', 'button');
+      const parts = h('span', 'cite-text');
+      const from = field(text, 'From');
+      parts.append(
+        h('span', 'cite-result', shortName(text).full),
+        h('span', 'cite-detail', `${from ? `From ${from} · ` : ''}${new Date(n.createdAt).toLocaleString()}`),
+      );
+      b.append(parts);
+      b.title = n.id;
+      b.addEventListener('click', () => hooks.open(n.id));
+      box.append(b);
+    }
+  };
+  refresh();
+  return { el: box, refresh };
 }
 
 /**
@@ -229,14 +239,15 @@ export function writeSection(m, ctx, hooks) {
   const kind = kindOf(m.tags);
   if (kind === 'goal') {
     const intent = intentForm(m, ctx, hooks);
-    const amend = amendmentForm(ctx, hooks);
+    const amendments = amendmentList(ctx, hooks);
+    const amend = amendmentForm(ctx, hooks, amendments.refresh);
     /** @param {string | null} state */
     const show = (state) => {
       intent.hidden = !offersIntent(m.tags, state);
       amend.hidden = state === 'done';
     };
     show(stateOf(m.tags));
-    out.push(amendmentList(ctx, hooks), goalControls(m, ctx, hooks, show), intent, amend);
+    out.push(amendments.el, goalControls(m, ctx, hooks, show), intent, amend);
   } else if (kind === 'fact' && offersIntent(m.tags, ctx.status()?.state ?? null)) {
     out.push(intentForm(m, ctx, hooks));
   }

@@ -13,6 +13,7 @@ import {
   limitText,
   needsRunAgain,
   parseLimit,
+  refusedState,
   RUN_AGAIN,
 } from './writes.js';
 
@@ -20,7 +21,8 @@ import {
  * @typedef {import('../../supabase/functions/_shared/types.ts').Memory} Memory
  * @typedef {import('./sending.js').Hooks} Hooks
  * @typedef {import('./writes.js').Action} Action
- * @typedef {{ scope: string; board: string; pollNow(): Promise<void> }} ControlCtx
+ * @typedef {import('./board.js').ShownStatus} ShownStatus
+ * @typedef {{ scope: string; board: string; pollNow(): Promise<void>; status(): ShownStatus | null }} ControlCtx
  */
 
 /** States the state line colours. */
@@ -158,6 +160,18 @@ export function goalControls(goal, ctx, hooks, onState) {
       // A refused Stop leaves the confirmation open; put the buttons back.
       confirm.hidden = true;
       buttons.hidden = false;
+      const refused = refusedState(r.error);
+      if (refused) {
+        // The board moved on since this drawer was drawn (another tab, the lead, a person elsewhere): re-read it so
+        // the buttons offer what is valid now.
+        await ctx.pollNow();
+        if (!hooks.live()) return;
+        state = refused.state;
+        const shown = ctx.status();
+        if (shown && shown.state === state) max = shown.maxIntents;
+        render();
+        onState(state);
+      }
       say(line, 'error', r.error);
       return;
     }

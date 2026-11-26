@@ -174,7 +174,9 @@ the board file reference are in [`runner/README.md`](runner/README.md).
 
 A local web page for looking at the store and at a running board, and for steering a board without driving an agent to
 do it. Browse is read-only. On a board you can add hints, intents and amendments and control the run, and those are the
-only writes it makes: it cannot edit or delete a memory, or write one outside a board. It is also local-only:
+only writes it makes. The controls change only the goal's state tag and its `Max intents` line. The one delete is of a
+hint, intent or amendment it has just stored, when linking it fails. It never writes outside a board. It is also
+local-only:
 `deno task web` binds to `127.0.0.1`, serves `http://localhost:8787`, and refuses any request whose `Host` header is
 not `localhost` or `127.0.0.1`.
 
@@ -251,8 +253,8 @@ failure it shows the server's error. If the board is over 400 nodes, the page wa
   - **Restart** (when stopped) sets `state:running` again and says to run `board-runner run <board file>` again to
     start the workers. It is not offered when the goal is done.
   - **Intent limit** shows the goal's `Max intents` and saves a whole number, or `none`. Saving rewrites that line and
-    keeps the rest of the goal. Lowering it on a running board makes the lead stop once the count reaches the new
-    number. Raising it on a board that stopped at its limit sets it running again, as `/blackboard resume` does, with
+    keeps the rest of the goal. Once the count of intents reaches a lowered limit, the lead plans no more, and it stops
+    the board once no intent is open. Raising it on a board that stopped at its limit sets it running again, as `/blackboard resume` does, with
     the same note to run the runner again. A higher `max_intents` in the board file raises it again on the next
     `board-runner run`.
 

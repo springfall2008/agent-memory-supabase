@@ -43,11 +43,11 @@ def warns(actions):
 
 
 class SchedulerTest(unittest.TestCase):
-    def make(self, measure=None, workers=2):
+    def make(self, measure=None, workers=2, round_every=20):
         bf = board(
             workers=tuple(WorkerSlot("haiku", 120) for _ in range(workers)),
             measure=measure,
-            round_every_minutes=20,
+            round_every_minutes=round_every,
             claim_minutes=60,
         )
         return Scheduler(bf, 0.0, "LL")
@@ -152,13 +152,28 @@ class SchedulerTest(unittest.TestCase):
         self.assertIsNone(s.poll_send(130 + 120))
         self.assertEqual(s.poll_send(120 + 1200), ROUND)
 
-    def test_paused_lead_pending_warning_uses_the_paused_interval(self):
+    def test_paused_lead_pending_warning_keeps_the_running_interval(self):
+        # Pausing shortens the heartbeat, not the patience: a paused round can take as long as a running one.
         s = self.make()
         s.on_event(paused(0), 0)
         self.send(s, 120)
-        self.assertEqual(warns(s.on_event(Tick(), 120 + 239)), [])
-        actions = s.on_event(Tick(), 120 + 240)
+        self.assertFalse(any("no turn end" in w.message for w in warns(s.on_event(Tick(), 120 + 2399))))
+        actions = s.on_event(Tick(), 120 + 2400)
+        self.assertTrue(any("no turn end for 40 minutes" in w.message for w in warns(actions)))
+
+    def test_lead_pending_warning_waits_at_least_two_paused_heartbeats(self):
+        s = self.make(round_every=1)
+        s.on_event(running(0), 0)
+        self.send(s, 60)
+        self.assertEqual(warns(s.on_event(Tick(), 60 + 239)), [])
+        actions = s.on_event(Tick(), 60 + 240)
         self.assertTrue(any("no turn end for 4 minutes" in w.message for w in warns(actions)))
+
+    def test_paused_heartbeat_is_never_slower_than_running(self):
+        s = self.make(round_every=1)
+        s.on_event(paused(0), 0)
+        self.assertIsNone(s.poll_send(59))
+        self.assertEqual(s.poll_send(60), ROUND)
 
     def test_pending_blocks_sends(self):
         s = self.make()
@@ -252,6 +267,33 @@ class SchedulerTest(unittest.TestCase):
         s.on_event(MeasureDone("r", True, Path("/m/1.log")), 2)
         self.send(s, 2)
         self.assertEqual(warns(s.on_event(LeadTurn(LeadResult("done")), 3)), [])
+
+    def test_measurement_finished_while_paused_waits_for_resume(self):
+        s = self.make(measure=Measure("./m.sh", 0, 30, False))
+        s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref="r")), 1)
+        self.send(s, 1200)
+        s.on_event(paused(0), 1201)
+        s.on_event(MeasureDone("r", True, Path("/m/1.log")), 1202)
+        self.assertIsNone(s.poll_send(1203))  # a paused lead writes nothing, so the result is held back
+        self.assertEqual(self.send(s, 1200 + 120), ROUND + " measure")  # the paused heartbeat carries no result
+        self.assertFalse(s.measure.passed_sent)
+        s.on_event(running(0), 1330)
+        self.assertEqual(self.send(s, 1331), ROUND + " measure measured r pass output=/m/1.log")
+        self.assertTrue(s.measure.passed_sent)
+        s.on_event(running(0), 1340)
+        self.assertIsNone(s.poll_send(1341))  # sent once
+
+    def test_failed_measurement_while_paused_sets_no_pass(self):
+        s = self.make(measure=Measure("./m.sh", 0, 30, False))
+        s.on_event(LeadTurn(LeadResult("candidate", free=0, open=0, ref="r")), 1)
+        self.send(s, 1200)
+        s.on_event(paused(0), 1201)
+        s.on_event(MeasureDone("r", False, Path("/m/1.log")), 1202)
+        self.assertIsNone(s.poll_send(1203))
+        self.assertEqual(self.send(s, 1200 + 120), ROUND + " measure")
+        s.on_event(running(0), 1330)
+        self.assertEqual(self.send(s, 1331), ROUND + " measure measured r fail output=/m/1.log")
+        self.assertFalse(s.measure.passed_sent)
 
     # --- draining, refusal and interrupts ----------------------------------
 

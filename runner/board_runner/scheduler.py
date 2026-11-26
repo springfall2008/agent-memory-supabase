@@ -157,7 +157,8 @@ class Scheduler:
         self._next_send = None
         if self.lead_pending or self.needs_person or self.draining or self.shutdown_sent:
             return None
-        measured = self.measure.results[0] if self.measure.results else None
+        # A paused lead writes nothing, so a result sent to it would never be stored: hold it until it runs again.
+        measured = self.measure.results[0] if self.measure.results and not self.lead_paused else None
         heartbeat_due = now - self.last_sent >= self._heartbeat_seconds()
         if measured is None and not self.wanted and not heartbeat_due:
             return None
@@ -265,14 +266,14 @@ class Scheduler:
                 if now - state.started_at >= state.worker.timeout_minutes * 60:
                     state.killing = True
                     actions += [KillWorker(index), Release(state.label or "", state.worker.timeout_minutes)]
-        heartbeat = self._heartbeat_seconds()
-        if self.lead_pending and now - self.last_sent >= 2 * heartbeat:
+        stuck = self._stuck_seconds()
+        if self.lead_pending and now - self.last_sent >= stuck:
             # No Stop event for two heartbeats: the lead was interrupted, is stuck at a prompt, or died mid-turn.
             self.lead_pending = False
             self.needs_person = True
             actions.append(
                 Warn(
-                    f"The lead has had no turn end for {round(2 * heartbeat / 60)} minutes; it may need you. "
+                    f"The lead has had no turn end for {round(stuck / 60)} minutes; it may need you. "
                     f"Look with: tmux attach -t board-{self.bf.board}"
                 )
             )
@@ -296,8 +297,15 @@ class Scheduler:
     # --- helpers --------------------------------------------------------
 
     def _heartbeat_seconds(self) -> int:
-        """How often the lead is asked for a round: every 2 minutes while the board is paused, so a resume is seen."""
-        return PAUSED_HEARTBEAT_SECONDS if self.lead_paused else self.bf.round_every_minutes * 60
+        """How often the lead is asked for a round: at most every 2 minutes while the board is paused, so a resume is
+        seen, and never less often than while it runs."""
+        running = self.bf.round_every_minutes * 60
+        return min(PAUSED_HEARTBEAT_SECONDS, running) if self.lead_paused else running
+
+    def _stuck_seconds(self) -> int:
+        """How long a lead turn may run before the lead is taken to need the person: two running heartbeats, and never
+        under two paused ones. Pausing shortens the heartbeat, not a turn."""
+        return max(2 * PAUSED_HEARTBEAT_SECONDS, 2 * self.bf.round_every_minutes * 60)
 
     def _exclusive_hold(self) -> bool:
         m = self.measure

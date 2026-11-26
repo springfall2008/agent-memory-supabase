@@ -38,6 +38,7 @@ import {
   offersIntent,
   parseLimit,
   PRODUCE_DEFAULT,
+  refusedState,
   TEXT_MAX,
 } from '../../web/public/writes.js';
 import * as server from '../../supabase/functions/_shared/board-writes.ts';
@@ -341,6 +342,16 @@ Deno.test('parseLimit takes a positive whole number or none; limitText shows the
   assertEquals(parseLimit('no limit'), { ok: true, value: 'none' });
   for (const bad of ['', '0', '-1', '2.5', 'ten', '1e3', '99999999999999999999']) assert(!parseLimit(bad).ok, bad);
   assertEquals([limitText(7), limitText('none'), limitText(null)], ['7', 'none', '']);
+});
+
+Deno.test('refusedState reads the state from a refused control, and nothing else', () => {
+  assertEquals(refusedState('Board is paused'), { state: 'paused' });
+  assertEquals(refusedState('Board is stopped'), { state: 'stopped' });
+  assertEquals(refusedState('Board is unknown'), { state: null });
+  assertEquals(refusedState('Board is not running'), null);
+  assertEquals(refusedState('Board b not found'), null);
+  assertEquals(refusedState('Database error'), null);
+  assertEquals(refusedState('Board is done.'), null);
 });
 
 Deno.test('needsRunAgain and controlDone: only stopped to running asks for the runner again', () => {

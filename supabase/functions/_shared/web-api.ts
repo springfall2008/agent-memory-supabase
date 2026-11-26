@@ -234,9 +234,12 @@ async function addIntent(req: Request, store: WebStore): Promise<Response> {
   const goal = await goalOf(store, scope, board);
   const state = tagValue(goal.tags, 'state:');
   if (state !== 'running' && state !== 'paused') throw new Refusal(409, 'Board is not running');
+  // The fact's id as stored, not the request's text, goes in the Why line and the link.
+  let fromFact: string | undefined;
   if (from !== undefined) {
     const fact = await boardMemory(store, from, scope, board);
     if (!fact.tags.includes('kind:fact')) throw new Refusal(400, 'from must be a fact on the board');
+    fromFact = fact.id;
   }
   const progress = (await store.browse({
     tagsAll: [`board:${board}`, 'kind:progress'],
@@ -250,11 +253,11 @@ async function addIntent(req: Request, store: WebStore): Promise<Response> {
     store,
     scope,
     {
-      content: intentContent({ text, name, produce, giveUp, fromFact: from }),
+      content: intentContent({ text, name, produce, giveUp, fromFact }),
       category: 'observation',
       tags: [...tags, 'evergreen'],
     },
-    from === undefined ? undefined : { to: from, type: 'derived-from' },
+    fromFact === undefined ? undefined : { to: fromFact, type: 'derived-from' },
   );
   return Response.json({ memory }, { status: 201 });
 }
@@ -270,7 +273,7 @@ async function controlBoard(req: Request, store: WebStore): Promise<Response> {
     throw new Refusal(400, 'Invalid action');
   }
   const max = b.maxIntents;
-  if (max !== undefined && max !== 'none' && !(typeof max === 'number' && Number.isInteger(max) && max > 0)) {
+  if (max !== undefined && max !== 'none' && !(typeof max === 'number' && Number.isSafeInteger(max) && max >= 1)) {
     throw new Refusal(400, 'maxIntents must be a positive integer or "none"');
   }
   if (action === undefined && max === undefined) throw new Refusal(400, 'Give an action or maxIntents');

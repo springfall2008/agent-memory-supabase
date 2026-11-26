@@ -26,9 +26,9 @@ view, on the node it is about:
 
 ## Non-goals
 
-- Editing or deleting memories from the UI, dropping intents, or changing the rules or the goal's text (amendments
-  add to the goal instead) (the only goal
-  changes are its state and its `Max intents` line, under Board controls).
+- Editing or deleting memories from the UI, dropping intents, or changing the rules or the goal's text. Amendments add
+  to the goal instead, and the only goal changes are its state and its `Max intents` line, under Board controls. The
+  one delete is of a memory a write has just stored, when its link fails.
 - Hints that go straight to a worker. The person chose to keep hints as they are: advice for the lead.
 - Writes from the Browse tab outside a board.
 
@@ -126,14 +126,14 @@ change to the goal memory in the database, never a local file.
     board-blind; the lead reads the state.
 - **Stop.** The existing `/blackboard stop`: `state:stopped`. Workers end at their next step, the runner drains (lets
   running workers finish) and exits. The UI asks for confirmation first.
-- **Restart** (shown on a board stopped by hand): sets `state:stopped` back to `state:running` and says "now run
+- **Restart** (shown on every stopped board): sets `state:stopped` back to `state:running` and says "now run
   `board-runner run <board file>` again". Not offered when the goal is `state:done`.
 - **Intent limit.** A number box showing the goal's `Max intents` (or "no limit"), with Save.
   - Saving rewrites the goal's `Max intents:` line, keeping every other line.
   - Raising it on a board stopped at its limit (a conclusion contains `Stopped: intent limit`) is the skill's
     `resume`: the new limit and `state:running` again, then the same "run `board-runner run` again" note.
-  - Lowering it on a running board makes the lead stop once the count reaches the new number. A lower limit than the
-    intents already written is allowed (the lead stops at its next round).
+  - Once the count of intents reaches a lowered limit, the lead plans no more, and it stops the board once no intent
+    is open. A lower limit than the intents already written is allowed.
   - A higher `max_intents` in the board file raises it again on the next `board-runner run` (existing start
     behaviour); the UI says so in a hint line under the box.
 
@@ -165,7 +165,8 @@ reach, 15% is acceptable, as long as X is unchanged". The original goal stays in
   the lead stops with `Stopped: amended target met (amendment <id>)` instead.
 - Workers read amendments with the goal and rules; their constraints bind the work.
 - **Anti-cheat, for now a rule:** workers never change the goal, the rules or an amendment, and never write one; their
-  writes are their fact, their claim and tag changes on their own intent, and hints about their intent's work. The
+  writes are their fact, their claim and tag changes on their own intent, and hints (partial results, ideas and
+  problems). The
   lead honours only amendments whose `From:` names a person and reports any other as a breach.
 - **Follow-up:** a separate bot member for agents, with a database rule that bot members cannot write
   `kind:amendment`, `kind:goal` or `kind:rules` or edit the goal — enforcement instead of a rule.
@@ -219,10 +220,16 @@ Decisions made while building, where this design was silent or the plan contradi
   before stopping, so the measurement records it. Cost if wrong: intents spent on a fallback the person did not want
   pursued.
 - **Stop confirmation:** the page's confirmation focuses Cancel, so a repeated Enter cannot stop a board.
+- **Restart on every stopped board:** Restart is offered whenever the goal is `stopped`, not only when it was stopped
+  by hand, because the page cannot tell why. A board stopped as Unreachable or at its intent limit just stops again at
+  the lead's next round. Raising the limit is the way to resume a board stopped at its limit. Cost if wrong: a person
+  restarts a board that cannot go on, and the runner exits again a round later.
+- **A measurement held while paused:** the runner gives a measurement result to the lead only on a round where the
+  lead is not paused, because a paused lead writes nothing and the result would be lost. The first round after Resume
+  carries it.
 
 Open follow-ups:
 
 - Run a toy board on hosted to check the paused branch, the amendment fallback and the `round:<n>` tags.
 - A bot member for agents with a database rule against writing `kind:amendment`, `kind:goal` or `kind:rules`.
-- Minor review items deferred from the tasks (limit validation, a stale-state re-read after a 409, the amendment list
-  not refreshing on a poll) are recorded in the build ledger, not fixed here.
+- The amendment list redraws after the drawer's own Add amendment, but not on every poll.
