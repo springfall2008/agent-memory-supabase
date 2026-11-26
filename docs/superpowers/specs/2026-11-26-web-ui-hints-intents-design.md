@@ -24,7 +24,8 @@ view, on the node it is about:
 
 ## Non-goals
 
-- Editing or deleting memories from the UI, dropping intents, or changing the rules or the goal's text (the only goal
+- Editing or deleting memories from the UI, dropping intents, or changing the rules or the goal's text (amendments
+  add to the goal instead) (the only goal
   changes are its state and its `Max intents` line, under Board controls).
 - Hints that go straight to a worker. The person chose to keep hints as they are: advice for the lead.
 - Writes from the Browse tab outside a board.
@@ -147,6 +148,25 @@ Where the rules change:
 - `web-api`: `POST /boards/control` body `{ scope, board, action: 'pause' | 'resume' | 'stop' | 'restart', maxIntents? }`
   (or one route per action — builder's call), acting on the goal as the caller through `update`; state transitions
   allowed only from the states above (else 409 with the current state named). The status strip shows `paused`.
+
+## Amendments (added in the same conversation)
+
+Rather than editing the goal, the person can add an **amendment**: a sub-goal or fallback such as "if 20% is out of
+reach, 15% is acceptable, as long as X is unchanged". The original goal stays intact and each change is its own step.
+
+- Shape: `Amendment: <text>` / `From: <member name>`; tags `board:<board>`, `kind:amendment`, `evergreen`; linked
+  `depends-on` the goal. Added from the goal's drawer (`POST /amendments`) or with `/blackboard amend <project> <text>`.
+  Allowed in any state but `done`. Shown in the graph's header band with rules and progress.
+- The lead reads every amendment with the goal each round; the newer wins a conflict. A fallback target applies only
+  once the goal's own target is out of reach (Unreachable, or the intent limit with nothing open). Without `measure`
+  that concludes the board done, citing the amendment. With `measure` the runner's measurement stays the arbiter, so
+  the lead stops with `Stopped: amended target met (amendment <id>)` instead.
+- Workers read amendments with the goal and rules; their constraints bind the work.
+- **Anti-cheat, for now a rule:** workers never change the goal, the rules or an amendment, and never write one; their
+  writes are their fact, their claim and tag changes on their own intent, and hints about their intent's work. The
+  lead honours only amendments whose `From:` names a person and reports any other as a breach.
+- **Follow-up:** a separate bot member for agents, with a database rule that bot members cannot write
+  `kind:amendment`, `kind:goal` or `kind:rules` or edit the goal — enforcement instead of a rule.
 
 ## Constraints
 

@@ -125,6 +125,13 @@ transition table). Modify `supabase/functions/_shared/web-api.ts`, `supabase/fun
 - [ ] Step 3: run both — FAIL. Step 4: implement. Step 5: `deno task check && deno task test:unit && deno task test:int` PASS.
 - [ ] Step 6: commit `feat(web-api): add hints, intents and board controls`.
 
+### Task 3b: Amendments, and the worker no-steering rule (added in conversation)
+
+Requirements: `.superpowers/sdd/2026-11-26-web-ui-hints-intents/task-3b-brief.md` is the working brief; in short:
+`POST /amendments` and `amendmentContent` (server), `kind:amendment` + `amend` command + lead read/fallback rule +
+worker step-1 read + the worker no-steering rule (skill), proxy allow-list entry, and Task 5's Add amendment form and
+header-band placement. Spec section "Amendments". Commit `feat: amendments to a board's goal, and a worker no-steering rule`.
+
 ### Task 4: Proxy admits the write routes
 
 **Files:** Modify `web/lib/proxy.ts`. Test: `tests/unit/web-server.test.ts`.
