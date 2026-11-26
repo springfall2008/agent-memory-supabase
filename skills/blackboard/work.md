@@ -12,7 +12,7 @@ conversation, for every claim call.
    - `tags_all ["board:<project>", "kind:intent", "state:open"]`;
    - `minutes`: the goal's claim minutes;
    - `session_label`: your label;
-   - `description`: `Working on this for board <project>`.
+   - `description`: `Working on this for board <project> (label: <your label>)`.
 3. **If nothing is free** (`claimed: false`), say `No free intent (empty cycle <k> of 6, label: <your label>)`, where
    `<k>` counts empty cycles in a row in this conversation. If `<k>` is 6, **end the loop**. Otherwise end this cycle,
    and in a self-paced `/loop` wait about 5 minutes before the next: the lead plans on its own timer, up to 25 minutes
@@ -27,7 +27,7 @@ conversation, for every claim call.
    - If the work may outlast the claim, renew it during the work, as in the next step.
 6. **Confirm the intent is still yours.**
    - Call `claim_memory` on the intent with your `session_label`, the goal's claim minutes and the description
-     `Working on this for board <project>`. From your own session this renews the claim.
+     `Working on this for board <project> (label: <your label>)`. From your own session this renews the claim.
    - If it is refused, your claim lapsed and another session holds the intent now. Store your result as a hint,
      `Partial result for intent <id>: <what you found>`, tagged `board:<project>`, `kind:hint` and `evergreen`, and
      linked `relates-to` the intent. Write no fact, change no tags, and end the cycle, saying so and ending with
@@ -68,4 +68,7 @@ Fact for intent <intent id>: <the result in one line>
 Did: <what you did, one to three lines>
 Found: <only the new result>
 Evidence: <what lets someone check it: the command and its key output, a file path, a commit>
+By: <your worker label>
 ```
+
+The last line, `By:`, names you. It lets the board's viewer find your log, so keep it as the final line.

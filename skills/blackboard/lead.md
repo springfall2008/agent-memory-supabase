@@ -125,7 +125,8 @@ The command says `measure` when the board has a measurement that must confirm th
 - **Never propose a `<ref>` that has already been measured.** A measurement fact for it, below, says so. After a failed
   measurement, plan work toward a different result. Do not rename the same result to measure it again.
 - **`measured <ref> pass output=<path>`.** Read the file at `<path>`. Store a fact with the work.md template:
-  - `Fact for intent none: measurement of <ref> passed`, with the file's key lines as `Evidence:`;
+  - `Fact for intent none: measurement of <ref> passed`, with the file's key lines as `Evidence:`, and a last line
+    `By: <your lead label>`;
   - tagged `verdict:confirmed`;
   - linked `derived-from` the facts that named `<ref>`.
 
