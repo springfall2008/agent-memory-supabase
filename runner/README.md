@@ -67,6 +67,7 @@ TOML. Unknown keys are errors, so a typo is never silently ignored. See `example
 | `[measure] exclusive`                  | false                    | Let running workers finish, and start none, while measuring, for timings         |
 | `[lead] model`                         | opus                     | Any `--model` value, or `ollama:<name>`                                          |
 | `[lead] round_every_minutes`           | 20                       | Heartbeat round interval; 1 to 29, since the lead claim lasts 30                 |
+| `[lead] ideas_model`                   | inherit                  | Model of the sub-agent a struggling lead asks for ideas: inherit, a name, none   |
 | `[[worker]] model`                     | required                 | One table per slot                                                               |
 | `[[worker]] timeout_minutes`           | `worker_timeout_minutes` | This slot's runtime limit per run                                                |
 | `[permissions] allow`                  | none                     | Workers' `--allowedTools`; shared-memory tools are always added                  |

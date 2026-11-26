@@ -172,10 +172,12 @@ One reasoning round. It is meant to run under `/loop /blackboard lead <project>`
 
    **Stuck for ideas** *(added 2026-11-26, at the person's request)*. Only when the lead is struggling — it has no idea
    the board has not already tried, the last three intents to finish all failed, or it would otherwise declare the goal
-   unreachable because the ideas ran out — it asks a Fable sub-agent for up to three ideas. The sub-agent may read the
-   code and changes nothing. Its answer is stored as a hint, and the lead weighs it like any other: it may use none. At
-   most once a round, and not again until a new fact arrives. This is idea generation only, not the in-session workers
-   that Non-goals leaves for later.
+   unreachable because the ideas ran out — it asks a sub-agent for up to three ideas. The sub-agent may read the code
+   and changes nothing. Its answer is stored as a hint, and the lead weighs it like any other: it may use none. At most
+   once a round, and not again until a new fact arrives. This is idea generation only, not the in-session workers that
+   Non-goals leaves for later. The sub-agent's model is the goal's `Ideas model:` line: `inherit` (the lead's own, the
+   default, and the portable choice), a model name such as `fable`, or `none` to turn this off. A board file sets it
+   with `[lead] ideas_model`.
 5. **Rewrite the progress memory:** round number, time, what is established, best result, open questions.
 6. **Optionally do one intent** if it is idle, exactly as `work` does.
 7. **Release the mutex only when ending the loop.** Otherwise the renewed claim holds the lead role between rounds.

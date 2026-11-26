@@ -48,6 +48,7 @@ class BoardFile:
     measure: Measure | None
     lead_model: str
     round_every_minutes: int
+    ideas_model: str
     workers: tuple[WorkerSlot, ...]
     allow: tuple[str, ...]
     deny: tuple[str, ...]
@@ -61,7 +62,7 @@ _TOP_KEYS = {
     "max_open_intents", "claim_minutes", "max_intents", "measure", "lead", "worker", "permissions",
 }
 _MEASURE_KEYS = {"command", "pass_exit_code", "timeout_minutes", "exclusive"}
-_LEAD_KEYS = {"model", "round_every_minutes"}
+_LEAD_KEYS = {"model", "round_every_minutes", "ideas_model"}
 _WORKER_KEYS = {"model", "timeout_minutes"}
 _PERMISSION_KEYS = {"allow", "deny", "max_turns", "max_budget_usd", "worker_timeout_minutes"}
 
@@ -146,6 +147,9 @@ def load_board_file(path: Path) -> BoardFile:
     _check_keys(lead, _LEAD_KEYS, "lead.")
     lead_model = _model(lead, "model", "opus", "lead.")
     round_every = _int(lead, "round_every_minutes", 20, "lead.", maximum=29)
+    # The model of the sub-agent a struggling lead asks for ideas: "inherit" (the lead's own), a model name, or "none".
+    # The start one-shot copies it onto the goal's `Ideas model:` line, where the lead reads it.
+    ideas_model = _text(lead, "ideas_model", "lead.") if "ideas_model" in lead else "inherit"
 
     permissions = _table(data, "permissions")
     _check_keys(permissions, _PERMISSION_KEYS, "permissions.")
@@ -182,6 +186,7 @@ def load_board_file(path: Path) -> BoardFile:
         measure=measure,
         lead_model=lead_model,
         round_every_minutes=round_every,
+        ideas_model=ideas_model,
         workers=tuple(workers),
         allow=_strings(permissions, "allow", "permissions."),
         deny=deny,
