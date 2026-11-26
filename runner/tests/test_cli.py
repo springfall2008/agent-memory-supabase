@@ -1,12 +1,14 @@
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from board_runner.board_file import Measure, WorkerSlot
-from board_runner.cli import Runner, main
+from board_runner.cli import Runner, main, prune_worker_logs
 from tests.test_launch import board
 
 EMPTY_PANE = "● done\n────────\n> \n────────\n"
@@ -210,6 +212,78 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(h.tmux.killed, ["board-b"])
         state = json.loads((h.board_dir / "state.json").read_text())
         self.assertEqual(state["workers"], {})
+
+    def test_worker_stdout_file_is_jsonl(self):
+        h = self.harness()
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=2 open=2"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        logs = sorted(p.name for p in (h.board_dir / "workers").iterdir())
+        self.assertTrue(logs)
+        self.assertEqual({Path(n).suffix for n in logs}, {".jsonl", ".err"})
+
+    def test_finished_worker_leaves_state(self):
+        h = self.harness()
+        seen = {}
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=2 open=2"))
+        h.at(15, lambda: seen.update(running=json.loads((h.board_dir / "state.json").read_text())["workers"]))
+        h.at(100, lambda: seen.update(finished=json.loads((h.board_dir / "state.json").read_text())["workers"]))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        self.assertEqual(set(seen["running"]), {"0", "1"})
+        self.assertEqual(seen["finished"], {})
+
+    def test_worker_label_is_regenerated_while_a_log_for_it_exists(self):
+        h = self.harness(bf=board(workers=(WorkerSlot("haiku", 120),)))
+        logs = h.board_dir / "workers"
+        logs.mkdir()
+        (logs / "3-board-b-aaaa.jsonl").write_text("old\n")
+        (logs / "1-board-b-bbbb.json").write_text("{}")
+        labels = iter(["board-b-aaaa", "board-b-bbbb", "board-b-cccc"])
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        with mock.patch("board_runner.cli.new_label", side_effect=lambda b, role: "board-b-lead-abcd" if role == "lead" else next(labels)):
+            h.runner.run(takeover=False)
+        self.assertEqual((logs / "3-board-b-aaaa.jsonl").read_text(), "old\n")
+        self.assertTrue((logs / "0-board-b-cccc.jsonl").exists())
+        self.assertFalse((logs / "0-board-b-aaaa.jsonl").exists())
+        self.assertFalse((logs / "0-board-b-bbbb.jsonl").exists())
+
+    def test_save_state_replaces_the_file_whole(self):
+        h = self.harness()
+        h.runner.save_state({"workers": {"0": {"label": "board-b-1234"}}})
+        replaced = []
+        real_replace = os.replace
+
+        def spy(src, dst):
+            src, dst = Path(src), Path(dst)
+            # The new content is complete before it takes the state file's name.
+            self.assertEqual(json.loads(src.read_text()), {"workers": {}})
+            self.assertEqual(json.loads(dst.read_text())["workers"], {"0": {"label": "board-b-1234"}})
+            replaced.append((src.parent, dst))
+            real_replace(src, dst)
+
+        with mock.patch("board_runner.cli.os.replace", side_effect=spy):
+            h.runner.save_state({"workers": {}})
+        self.assertEqual(replaced, [(h.board_dir, h.board_dir / "state.json")])
+        self.assertEqual(json.loads((h.board_dir / "state.json").read_text()), {"workers": {}})
+        self.assertEqual(sorted(p.name for p in h.board_dir.iterdir()), ["state.json"])
+
+    def test_prune_keeps_newest_200(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp)
+            for i in range(250):
+                for suffix in (".jsonl", ".err"):
+                    path = logs / f"0-run{i:03d}{suffix}"
+                    path.write_text("x")
+                    os.utime(path, (1000 + i, 1000 + i))
+            prune_worker_logs(logs)
+            names = {p.name for p in logs.iterdir()}
+            self.assertEqual(len(names), 400)
+            self.assertNotIn("0-run049.jsonl", names)
+            self.assertNotIn("0-run049.err", names)
+            self.assertIn("0-run050.jsonl", names)
+            self.assertIn("0-run249.err", names)
 
     def test_reuses_live_lead_session(self):
         state = {"lead_session_id": "sess-1", "lead_label": "board-b-lead-abcd", "workers": {}}

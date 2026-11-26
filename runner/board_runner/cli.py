@@ -47,6 +47,24 @@ LEAD_CHECK_SECONDS = 10
 SCRIPT = Path(__file__).resolve().parent.parent / "board-runner"
 
 
+def prune_worker_logs(workers_dir: Path, keep: int = 200) -> None:
+    """Keep the newest `keep` worker runs (a `.jsonl` and its `.err`); delete the rest."""
+    runs: dict[str, float] = {}
+    for path in workers_dir.iterdir():
+        if path.suffix in (".jsonl", ".err"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            runs[path.stem] = max(runs.get(path.stem, 0.0), mtime)
+    for stem in sorted(runs, key=lambda s: (runs[s], s), reverse=True)[keep:]:
+        for suffix in (".jsonl", ".err"):
+            try:
+                (workers_dir / f"{stem}{suffix}").unlink()
+            except OSError:
+                pass
+
+
 def runner_home() -> Path:
     return Path(os.environ.get("BOARD_RUNNER_HOME", "~/.board-runner")).expanduser()
 
@@ -125,7 +143,11 @@ class Runner:
             return {}
 
     def save_state(self, state: dict) -> None:
-        self.state_path.write_text(json.dumps(state, indent=2))
+        # Write a temporary file beside it, then rename it over the state file: a reader (the web UI) never sees it
+        # empty or half-written.
+        tmp = self.state_path.with_name(f".{self.state_path.name}.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, self.state_path)
 
     def interrupt(self, *_args) -> None:
         self.interrupts_pending += 1
@@ -248,7 +270,7 @@ class Runner:
             actions: list = []
             for text in self._new_lead_texts():
                 actions += scheduler.on_event(LeadTurn(parse_lead(text)), now)
-            actions += self._poll_workers(scheduler, now)
+            actions += self._poll_workers(scheduler, state, now)
             actions += self._poll_measure(scheduler, now)
             while self.interrupts_pending:
                 self.interrupts_pending -= 1
@@ -294,7 +316,7 @@ class Runner:
                 texts.append(event.get("text") or "")
         return texts
 
-    def _poll_workers(self, scheduler: Scheduler, now: float) -> list:
+    def _poll_workers(self, scheduler: Scheduler, state: dict, now: float) -> list:
         actions = []
         for slot, worker in list(self.workers.items()):
             proc = worker["proc"]
@@ -310,6 +332,8 @@ class Runner:
             result = parse_work(text)
             self.log(f"worker {slot} ({worker['label']}) exited {proc.returncode}: {result.kind}")
             del self.workers[slot]
+            if state.get("workers", {}).pop(str(slot), None) is not None:
+                self.save_state(state)
             actions += scheduler.on_event(WorkerExit(slot, result), now)
         return actions
 
@@ -419,10 +443,14 @@ class Runner:
 
     def _start_worker(self, slot: int, scheduler: Scheduler, state: dict, now: float) -> None:
         spec = self.bf.workers[slot]
-        label = new_label(self.bf.board, "worker")
         logs = self.dir / "workers"
         logs.mkdir(exist_ok=True)
-        path = logs / f"{slot}-{label}.json"
+        prune_worker_logs(logs)
+        label = new_label(self.bf.board, "worker")
+        # A label names one run: the web UI finds a log by its label alone, whatever the slot.
+        while any(logs.glob(f"*-{label}.jsonl")) or any(logs.glob(f"*-{label}.json")):
+            label = new_label(self.bf.board, "worker")
+        path = logs / f"{slot}-{label}.jsonl"
         stdout = path.open("w")
         stderr = (logs / f"{slot}-{label}.err").open("w")
         proc = self.popen(

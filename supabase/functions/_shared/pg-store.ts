@@ -466,7 +466,7 @@ export class PgMemoryStore implements MemoryStore {
           ${f.after ?? null}::timestamptz, ${f.before ?? null}::timestamptz,
           ${limit * OVER_FETCH_FACTOR}::int)`;
       const results = applyDecay(this.toDecayInputs(rows), limit, this.halfLifeDays);
-      await this.touch(tx, results);
+      if (f.touch !== false) await this.touch(tx, results);
       await this.addSessionLabels(tx, results);
       await this.addLinks(tx, results.map((r) => r.memory));
       await this.addClaims(tx, results.map((r) => r.memory));
@@ -506,6 +506,22 @@ export class PgMemoryStore implements MemoryStore {
       await this.addLinks(tx, memories);
       await this.addClaims(tx, memories);
       return { memories, hasMore: rows.length > limit };
+    });
+  }
+
+  /**
+   * One memory with its links, claim and session labels, or null when the id is not a UUID, does not exist, is
+   * unreadable to the caller or is soft-deleted (all indistinguishable). Not an access: no `touch_accessed`.
+   */
+  async get(id: string): Promise<Memory | null> {
+    if (!isUuid(id)) return null;
+    return await this.run(async (tx) => {
+      const rows = await tx<Row[]>`select * from agent_memory.memory_view where id = ${id}::uuid`;
+      if (rows.length === 0) return null;
+      const memory = rowToMemory(rows[0]);
+      await this.addLinks(tx, [memory]);
+      await this.addClaims(tx, [memory]);
+      return memory;
     });
   }
 

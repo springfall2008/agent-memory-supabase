@@ -223,6 +223,8 @@ export interface SearchFilters {
   before?: string;
   limit?: number;
   scopes?: string[];
+  /** Ranked search counts as an access by default; `false` leaves `access_count` alone (read-only callers). */
+  touch?: boolean;
 }
 
 /** Filters for unranked browsing: `limit` is the page size and `offset` the number of matches to skip. */

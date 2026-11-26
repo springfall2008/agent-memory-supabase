@@ -162,6 +162,70 @@ model and one slot per worker, for example one Opus and one Sonnet:
 It enforces each worker's runtime limit and the board's total intent limit, which you can raise to resume. Setup and
 the board file reference are in [`runner/README.md`](runner/README.md).
 
+## Web UI
+
+A local web page for looking at the store and at a running board, without driving an agent to do it. It is read-only:
+it cannot write, claim, link or delete anything. It is also local-only: `deno task web` binds to `127.0.0.1`, serves
+`http://localhost:8787`, and refuses any request whose `Host` header is not `localhost` or `127.0.0.1`.
+
+```sh
+deno task web
+```
+
+It reads `.env` (see `.env.example`):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `AGENT_MEMORY_TOKEN` | required | The member token. The local server adds it to each request; the browser never sees it |
+| `AGENT_MEMORY_URL` | none | Your `agent-memory` function URL. The server swaps `agent-memory` for `web-api` |
+| `WEB_API_URL` | derived from the above | The `web-api` function URL. Set it to override, for example to use the local stack |
+| `WEB_PORT` | 8787 | The local port |
+| `BOARD_RUNNER_HOME` | `~/.board-runner` | Where the board runner keeps worker logs |
+
+The page calls a separate `web-api` Edge Function (read-only GET routes), so polling never loads the embedding model.
+It runs as the token's member, so it shows what that member can read and nothing else. Deploying `web-api` to a hosted
+project is a hosted change, like any other: see "Rules that bite" in `CLAUDE.md`. To try it against the local stack,
+see [Development](#development).
+
+- **Browse:** a search box, scope, tag (any or all) and category filters, and a table. With the box empty it lists
+  newest first and loads more on request, like `search` with no query. With text it runs ranked search, and "show
+  more" raises the limit up to 100 (ranked search has no offset). Looking does not count as an access, so it does not
+  change a memory's decay. A "Graph" button on any tag opens that tag's graph.
+- **Board:** pick a board (its scope and `board:` tag together) and see it as a graph, updated every 3 seconds while the
+  tab is visible. The strip above shows the goal's state, the round, intents used out of `Max intents:` and the best
+  result. The page says when it last refreshed, when the connection fails, and "stale" when a refresh is overdue.
+  - Each round is a horizontal band, with its intents in a row and each intent's results directly beneath it. Faint
+    "Round n" labels separate the bands. A board whose intents have no `round:<n>` tag is grouped as "Batch n"
+    instead, by gaps of two minutes in creation time. A dashed line joins the goal to any intent that links to
+    nothing.
+  - Colour shows the kind (goal, intent, fact, hint, conclusion), and a fact's colour shows its verdict. A ring shows
+    an active claim, with the worker's label. A node that changes flashes. A board over 400 nodes is not fully drawn,
+    and the page says so.
+- **Drawer:** click a node for three tabs. **Memory** has the full content, tags, scope and claim. For an intent it
+  starts with "Starting point": what it builds on and the latest measurement before it. For a fact it shows the result
+  first, and for the goal the progress fields and latest measurement. **Links** lists links in and out, and clicking
+  one selects that node. **Worker log** is described next.
+
+### Worker log
+
+For a fact with a `By: <label>` line, or an intent whose claim description carries `(label: <label>)`, the Worker log
+tab shows that worker's transcript: what it said, each tool call, and each result collapsed to a few lines. While the
+worker runs, it follows the log live. A done intent's log is found through its fact. The skill writes both the `By:`
+line and the claim label.
+
+The log comes from files on this machine, so it needs the board runner to have run the worker here. It reads
+`workers/<slot>-<label>.jsonl` (or the older `.json` and `.err` files) under `~/.board-runner/<board>/`, or under
+`$BOARD_RUNNER_HOME`. A worker started on another machine or by hand has no local log. The tab then says "No local log:
+this worker did not run on this machine", and the rest of the board works as before. The log route accepts only a
+`<board>/<label>` of the shape the runner makes, and never reads outside that board's `workers/` folder.
+
+### Later: hosting
+
+The browser code calls `/api/...` only, so a login front door could replace the local proxy later. Worker logs would
+stop being local files then. Transcripts hold tool output, which can include file contents and command output, so a
+hosted version must not expose them without a separate, deliberate decision. Writing (hints, stop) and a History tab
+are also not in this version. The design is in `docs/superpowers/specs/2026-11-26-web-ui-design.md`.
+
 ## Threads and sessions
 
 Memories hold what is known; **threads** hold the discussion around it. A thread lives in one scope, has a title and
@@ -447,6 +511,16 @@ deno task test:unit
 supabase test db              # pgTAP: schema, RLS, functions, search
 deno task test:int            # against the local database
 supabase functions serve agent-memory & deno task test:e2e   # needs the model download
+```
+
+`deno task web` starts the web UI on `http://localhost:8787` (read-only, bound to 127.0.0.1) using
+`AGENT_MEMORY_TOKEN` from `.env`. To point it at the local stack instead of the hosted project:
+
+```sh
+supabase start && supabase functions serve web-api        # another shell
+AGENT_MEMORY_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  deno run -A scripts/admin.ts issue-token <local member> web-local     # prints a local token once
+WEB_API_URL=http://127.0.0.1:54321/functions/v1/web-api AGENT_MEMORY_TOKEN=<local token> deno task web
 ```
 
 CI (`.github/workflows/ci.yml`) runs everything except the end-to-end test.

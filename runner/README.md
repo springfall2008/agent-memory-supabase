@@ -36,6 +36,10 @@ runner/board-runner status boards/my-board.toml
   `run` carries on with it. **Ctrl-C twice:** kill the workers now; their claims lapse after `claim_minutes`.
 - **The lead needs you:** if a lead turn ends without a `BOARD-LEAD` line, for example because the lead asked you
   something, the runner stops sending and prints the attach command. It carries on after the lead's next proper round.
+- **First run in a new folder:** Claude Code asks whether to trust the `workspace` folder, and the lead's tmux session
+  waits at that dialog until you accept it. Attach, accept, and the board carries on.
+- **Watch it in a browser:** `deno task web` shows the board as a graph, and its Worker log tab follows each worker's
+  transcript from `workers/`. See "Web UI" in the [main README](../README.md#web-ui).
 - **Raise the intent limit:** a board that reaches `max_intents` stops, and its conclusion gives the best result so far.
   Raise `max_intents` in the file and `run` again. The board resumes.
 
@@ -43,9 +47,11 @@ Runner state lives in `~/.board-runner/<board>/`, or under `$BOARD_RUNNER_HOME`:
 
 - `runner.log`;
 - `events.jsonl`, one line per lead turn, written by the lead's Stop hook;
-- `workers/<slot>-<label>.json` and `.err`, one pair per worker run;
+- `workers/<slot>-<label>.jsonl` and `.err`, one pair per worker run: the `.jsonl` is the worker's `stream-json`
+  transcript, written live, and the newest 200 runs are kept;
 - `measure/<n>.log`, one per measurement;
-- `state.json`, the lead's session and label plus the running workers, used to resume after a restart;
+- `state.json`, the lead's session and label plus the running workers, used to resume after a restart (a finished worker
+  is removed from it);
 - the `lead-settings.json` and `oneshot-settings.json` the runner generates.
 
 ## Board file

@@ -411,3 +411,56 @@ Deno.test('browse limits go to 400 and offsets must be non-negative integers', (
     // ranked search keeps its 100 cap
     await assertRejects(() => rw.search('lone', 'keyword', { limit: 101 }), Error, 'limit must be between 1 and 100');
   }));
+
+Deno.test('get returns links and claim for a readable memory', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const [ro] = mk(w.ro.id);
+    const [{ id: sid }] = await admin`
+      insert into agent_memory.agent_sessions (member_id, label) values (${w.rw.id}, 'web-a') returning id`;
+    const a = await rw.store(w.alpha.name, req('okapi one'), { session: sid });
+    const b = await rw.store(w.alpha.name, req('okapi two'));
+    await rw.relate(a.id, b.id, 'relates-to');
+    await rw.claim(a.id, 'reading it', {}, { sessionLabel: 'web-a' });
+    const mine = await rw.get(a.id);
+    assertEquals(mine?.id, a.id);
+    assertEquals(mine?.content, 'okapi one');
+    assertEquals(mine?.scope, w.alpha.name);
+    assertEquals(mine?.createdSession, 'web-a');
+    assertEquals(mine?.links, [{ type: 'relates-to', direction: 'both', memoryId: b.id }]);
+    assertEquals(mine?.claim?.by, w.rw.name);
+    assertEquals(mine?.claim?.mine, true);
+    // a reader sees the same memory and links, and the claim without `mine`
+    const theirs = await ro.get(a.id);
+    assertEquals(theirs?.links, mine?.links);
+    assertEquals(theirs?.claim?.by, w.rw.name);
+    assertEquals(theirs?.claim?.mine, undefined);
+  }));
+
+Deno.test('get returns null for an unreadable, an absent and a non-uuid id', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const [none] = mk(w.none.id);
+    const m = await rw.store(w.alpha.name, req('private okapi'));
+    assertEquals((await rw.get(m.id))?.id, m.id);
+    assertEquals(await none.get(m.id), null);
+    assertEquals(await rw.get(crypto.randomUUID()), null);
+    assertEquals(await rw.get('not-a-uuid'), null);
+    await admin`update agent_memory.memories set deleted_at = now() where id = ${m.id}`;
+    assertEquals(await rw.get(m.id), null);
+  }));
+
+Deno.test('search with touch false leaves access_count unchanged', () =>
+  withWorld(async (w, admin, mk) => {
+    const [rw] = mk(w.rw.id);
+    const m = await rw.store(w.alpha.name, req('okapi touch candidate'));
+    // access counting only applies to memories idle for over an hour
+    await setUpdated(admin, m.id, '2 hours');
+    const count = async () =>
+      (await admin`select access_count from agent_memory.memories where id = ${m.id}`)[0].access_count as number;
+    const quiet = await rw.search('okapi', 'keyword', { touch: false });
+    assertEquals(quiet.length, 1);
+    assertEquals(await count(), 0);
+    await rw.search('okapi', 'keyword', {});
+    assertEquals(await count(), 1);
+  }));

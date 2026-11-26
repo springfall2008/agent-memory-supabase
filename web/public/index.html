@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent memory</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <span class="brand">Agent memory</span>
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" id="tab-browse" aria-selected="true">Browse</button>
+        <button type="button" role="tab" id="tab-board" aria-selected="false">Board</button>
+      </nav>
+    </header>
+    <main>
+      <section id="panel-browse" class="panel" role="tabpanel" aria-labelledby="tab-browse"></section>
+      <section id="panel-board" class="panel board" role="tabpanel" aria-labelledby="tab-board" hidden></section>
+    </main>
+    <script src="vendor/cytoscape.min.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

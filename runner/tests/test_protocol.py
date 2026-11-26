@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from board_runner.protocol import (
@@ -95,6 +96,26 @@ class ClaudeResultTextTest(unittest.TestCase):
         for stdout in ("", "{", "[]", '{"is_error":true}', '{"result":5}', "null"):
             with self.subTest(stdout=stdout):
                 self.assertIsNone(claude_result_text(stdout))
+
+    def test_stream_takes_last_result_line(self):
+        lines = [
+            {"type": "system", "subtype": "init"},
+            {"type": "assistant", "message": {"content": []}},
+            {"type": "result", "result": "done\nBOARD-WORK none", "is_error": False},
+        ]
+        stdout = "\n".join(json.dumps(line) for line in lines) + "\n"
+        self.assertEqual(claude_result_text(stdout), "done\nBOARD-WORK none")
+
+    def test_stream_without_result_is_none(self):
+        stdout = '{"type":"system"}\n{"type":"assistant"}\n'
+        self.assertIsNone(claude_result_text(stdout))
+
+    def test_stream_skips_malformed_and_truncated_lines(self):
+        stdout = 'not json\n{"type":"result","result":"ok"}\n{"type":"assistant","mess'
+        self.assertEqual(claude_result_text(stdout), "ok")
+
+    def test_single_object_still_works(self):
+        self.assertEqual(claude_result_text('{"type":"result","result":"one"}\n'), "one")
 
 
 if __name__ == "__main__":
