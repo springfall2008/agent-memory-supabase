@@ -1,9 +1,28 @@
 import { MAX_BROWSE_LIMIT, StoreError } from './limits.ts';
 import {
+  BOARD_ACTIONS,
+  BOARD_NAME,
+  BOARD_NAME_MAX,
+  type BoardAction,
+  FIELD_MAX,
+  fold,
+  hintContent,
+  intentContent,
+  isRaise,
+  type MaxIntents,
+  maxIntentsOf,
+  roundOf,
+  TEXT_MAX,
+  transition,
+  withMaxIntents,
+  withState,
+} from './board-writes.ts';
+import {
   type BrowseFilters,
   type BrowsePage,
   type GraphFilters,
   type GraphResult,
+  type LinkType,
   type Memory,
   MEMORY_CATEGORIES,
   type MemoryCategory,
@@ -11,18 +30,33 @@ import {
   type SearchFilters,
   type SearchMode,
   type SearchResult,
+  type StoreRequest,
+  type UpdateRequest,
 } from './types.ts';
 
-/** The read-only slice of the store the web UI uses. `PgMemoryStore` satisfies it. */
+/** The slice of the store the web UI uses. `PgMemoryStore` satisfies it. */
 export interface WebStore {
   listScopes(): Promise<ScopeInfo[]>;
   browse(f: BrowseFilters): Promise<BrowsePage>;
   search(q: string, mode: SearchMode, f: SearchFilters): Promise<SearchResult[]>;
   get(id: string): Promise<Memory | null>;
   graph(f: GraphFilters): Promise<GraphResult>;
+  /** The caller's own display name. */
+  memberName(): Promise<string>;
+  store(scope: string, r: StoreRequest): Promise<Memory>;
+  relate(from: string, to: string, type: LinkType): Promise<void>;
+  update(id: string, u: UpdateRequest): Promise<Memory>;
+  delete(id: string): Promise<void>;
 }
 
 const bad = (error: string, status = 400) => Response.json({ error }, { status });
+
+/** A refusal decided by the route itself, with its status. */
+class Refusal extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
 
 /** The route is the path after the first `web-api` segment (the whole path when there is none). */
 function routeOf(url: URL): string[] {
@@ -51,12 +85,217 @@ function defined<T extends object>(o: T): T {
 const tagValue = (tags: string[], prefix: string): string | undefined =>
   tags.find((t) => t.startsWith(prefix))?.slice(prefix.length);
 
+// ── Write routes ───────────────────────────────────────────────────
+
+type Body = Record<string, unknown>;
+
+async function jsonBody(req: Request): Promise<Body> {
+  const type = (req.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') throw new Refusal(415, 'Content-Type must be application/json');
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    throw new Refusal(400, 'Invalid JSON');
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new Refusal(400, 'The body must be a JSON object');
+  }
+  return body as Body;
+}
+
+function optionalString(b: Body, key: string): string | undefined {
+  const v = b[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') throw new Refusal(400, `${key} must be a string`);
+  return v;
+}
+
+function requiredString(b: Body, key: string): string {
+  const v = optionalString(b, key);
+  if (v === undefined || v === '') throw new Refusal(400, `${key} is required`);
+  return v;
+}
+
+/** scope and board, which every write route takes. */
+function boardOf(b: Body): { scope: string; board: string } {
+  const scope = requiredString(b, 'scope');
+  const board = requiredString(b, 'board');
+  if (board.length > BOARD_NAME_MAX || !BOARD_NAME.test(board)) throw new Refusal(400, 'Invalid board name');
+  return { scope, board };
+}
+
+/** The person's text, folded onto one line: 1 to TEXT_MAX characters. */
+function textOf(b: Body): string {
+  const text = fold(optionalString(b, 'text') ?? '');
+  if (text.length < 1 || text.length > TEXT_MAX) throw new Refusal(400, `text must be 1 to ${TEXT_MAX} characters`);
+  return text;
+}
+
+function fieldOf(b: Body, key: string): string | undefined {
+  const v = optionalString(b, key);
+  if (v !== undefined && fold(v).length > FIELD_MAX) {
+    throw new Refusal(400, `${key} must be at most ${FIELD_MAX} characters`);
+  }
+  return v;
+}
+
+/** The board's goal in `scope`; absent, an unreadable scope and an unknown scope all read the same. */
+async function goalOf(store: WebStore, scope: string, board: string): Promise<Memory> {
+  let goal: Memory | undefined;
+  try {
+    goal = (await store.browse({ tagsAll: [`board:${board}`, 'kind:goal'], scopes: [scope], limit: 1 })).memories[0];
+  } catch (e) {
+    if (!(e instanceof StoreError)) throw e;
+  }
+  if (!goal) throw new Refusal(404, `Board ${board} not found`);
+  return goal;
+}
+
+/** A readable memory of this board, in the store's own not-found wording otherwise. */
+async function boardMemory(store: WebStore, id: string, scope: string, board: string): Promise<Memory> {
+  const m = await store.get(id);
+  if (!m || m.scope !== scope || !m.tags.includes(`board:${board}`)) throw new Refusal(404, `Memory ${id} not found`);
+  return m;
+}
+
+/** Stores, then links; a failed link deletes the memory it just stored and rethrows. */
+async function storeLinked(
+  store: WebStore,
+  scope: string,
+  r: StoreRequest,
+  link?: { to: string; type: LinkType },
+): Promise<Memory> {
+  const memory = await store.store(scope, r);
+  if (link) {
+    try {
+      await store.relate(memory.id, link.to, link.type);
+    } catch (e) {
+      try {
+        await store.delete(memory.id);
+      } catch (d) {
+        console.error('web-api rollback failed', memory.id, d);
+      }
+      throw e;
+    }
+  }
+  return memory;
+}
+
+/** Kinds a hint links to with `relates-to`; a hint on any other node is board-wide. */
+const HINT_LINKS = ['intent', 'fact', 'hint'];
+
+async function addHint(req: Request, store: WebStore): Promise<Response> {
+  const b = await jsonBody(req);
+  const { scope, board } = boardOf(b);
+  const text = textOf(b);
+  const about = optionalString(b, 'about');
+  await goalOf(store, scope, board);
+  const target = about === undefined ? undefined : await boardMemory(store, about, scope, board);
+  const name = await store.memberName();
+  const linked = target && HINT_LINKS.includes(tagValue(target.tags, 'kind:') ?? '');
+  const memory = await storeLinked(
+    store,
+    scope,
+    { content: hintContent(text, name), category: 'observation', tags: [`board:${board}`, 'kind:hint', 'evergreen'] },
+    linked ? { to: target.id, type: 'relates-to' } : undefined,
+  );
+  return Response.json({ memory }, { status: 201 });
+}
+
+async function addIntent(req: Request, store: WebStore): Promise<Response> {
+  const b = await jsonBody(req);
+  const { scope, board } = boardOf(b);
+  const text = textOf(b);
+  const produce = fieldOf(b, 'produce');
+  const giveUp = fieldOf(b, 'giveUp');
+  const from = optionalString(b, 'from');
+  const goal = await goalOf(store, scope, board);
+  const state = tagValue(goal.tags, 'state:');
+  if (state !== 'running' && state !== 'paused') throw new Refusal(409, 'Board is not running');
+  if (from !== undefined) {
+    const fact = await boardMemory(store, from, scope, board);
+    if (!fact.tags.includes('kind:fact')) throw new Refusal(400, 'from must be a fact on the board');
+  }
+  const progress = (await store.browse({
+    tagsAll: [`board:${board}`, 'kind:progress'],
+    scopes: [scope],
+    limit: 1,
+  })).memories[0];
+  const round = progress ? roundOf(progress.content) : undefined;
+  const name = await store.memberName();
+  const tags = [`board:${board}`, 'kind:intent', 'state:open', ...(round === undefined ? [] : [`round:${round}`])];
+  const memory = await storeLinked(
+    store,
+    scope,
+    {
+      content: intentContent({ text, name, produce, giveUp, fromFact: from }),
+      category: 'observation',
+      tags: [...tags, 'evergreen'],
+    },
+    from === undefined ? undefined : { to: from, type: 'derived-from' },
+  );
+  return Response.json({ memory }, { status: 201 });
+}
+
+/** The marker the lead writes in a conclusion when a board stops at its intent limit. */
+const LIMIT_STOP = 'Stopped: intent limit';
+
+async function controlBoard(req: Request, store: WebStore): Promise<Response> {
+  const b = await jsonBody(req);
+  const { scope, board } = boardOf(b);
+  const action = b.action;
+  if (action !== undefined && !(BOARD_ACTIONS as readonly unknown[]).includes(action)) {
+    throw new Refusal(400, 'Invalid action');
+  }
+  const max = b.maxIntents;
+  if (max !== undefined && max !== 'none' && !(typeof max === 'number' && Number.isInteger(max) && max > 0)) {
+    throw new Refusal(400, 'maxIntents must be a positive integer or "none"');
+  }
+  if (action === undefined && max === undefined) throw new Refusal(400, 'Give an action or maxIntents');
+
+  const goal = await goalOf(store, scope, board);
+  const state = tagValue(goal.tags, 'state:') ?? 'unknown';
+  let next: string | undefined;
+  if (action !== undefined) {
+    const to = transition(state, action as BoardAction);
+    if (to === null) throw new Refusal(409, `Board is ${state}`);
+    next = to;
+  }
+  const u: UpdateRequest = {};
+  if (max !== undefined) {
+    const content = withMaxIntents(goal.content, max as MaxIntents);
+    if (content !== goal.content) u.content = content;
+    // Raising the limit of a board that stopped at it is the skill's `resume`.
+    if (next === undefined && state === 'stopped' && isRaise(maxIntentsOf(goal.content), max as MaxIntents)) {
+      const conclusions = await store.browse({
+        tagsAll: [`board:${board}`, 'kind:conclusion'],
+        scopes: [scope],
+        limit: 20,
+      });
+      if (conclusions.memories.some((m) => m.content.includes(LIMIT_STOP))) next = 'running';
+    }
+  }
+  if (next !== undefined) u.tags = withState(goal.tags, next);
+  if (u.content === undefined && u.tags === undefined) return Response.json({ goal });
+  return Response.json({ goal: await store.update(goal.id, u) });
+}
+
+const WRITE_ROUTES = new Map<string, (req: Request, store: WebStore) => Promise<Response>>([
+  ['hints', addHint],
+  ['intents', addIntent],
+  ['boards/control', controlBoard],
+]);
+
 export async function routeWebApi(req: Request, store: WebStore): Promise<Response> {
-  if (req.method !== 'GET') return bad('Method not allowed', 405);
   const url = new URL(req.url);
   const route = routeOf(url);
   const p = url.searchParams;
+  const write = WRITE_ROUTES.get(route.join('/'));
+  if (req.method !== (write ? 'POST' : 'GET')) return bad('Method not allowed', 405);
   try {
+    if (write) return await write(req, store);
+
     if (route.length === 1 && route[0] === 'scopes') {
       return Response.json({ scopes: await store.listScopes() });
     }
@@ -121,6 +360,7 @@ export async function routeWebApi(req: Request, store: WebStore): Promise<Respon
 
     return bad('Not found', 404);
   } catch (e) {
+    if (e instanceof Refusal) return bad(e.message, e.status);
     if (e instanceof StoreError) return bad(e.message);
     console.error('web-api error', e);
     return bad('Database error', 500);

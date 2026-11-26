@@ -8,7 +8,8 @@ import { routeWebApi } from '../_shared/web-api.ts';
 const dbUrl = Deno.env.get('SUPABASE_DB_URL');
 if (!dbUrl) throw new Error('SUPABASE_DB_URL is not set');
 const sql = connect(dbUrl);
-// Only ranked search embeds; browse, graph and boards must never build the inference session.
+// Only ranked search and the write routes (hints, intents, a goal edit) embed; browse, graph and boards must never
+// build the inference session.
 const embedder = new LazyEmbedder(() => new GteSmallEmbedder());
 
 const unauthorized = () => Response.json({ error: 'invalid or missing token' }, { status: 401 });
