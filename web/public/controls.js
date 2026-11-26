@@ -122,7 +122,8 @@ export function goalControls(goal, ctx, hooks, onState) {
   function askStop() {
     buttons.hidden = true;
     confirm.hidden = false;
-    stopNow.focus();
+    // Cancel, not Stop board: a repeated or reflexive Enter on "Stop…" must not confirm it.
+    cancel.focus();
   }
 
   cancel.addEventListener('click', () => {
