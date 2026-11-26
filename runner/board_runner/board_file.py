@@ -147,7 +147,7 @@ def load_board_file(path: Path) -> BoardFile:
     _check_keys(lead, _LEAD_KEYS, "lead.")
     lead_model = _model(lead, "model", "opus", "lead.")
     round_every = _int(lead, "round_every_minutes", 20, "lead.", maximum=29)
-    # The model of the sub-agent a struggling lead asks for ideas: "inherit" (the lead's own), a model name, or "none".
+    # The model of the sub-agent the lead asks for ideas when stuck: "inherit" (the lead's own), a model name, or "none".
     # The start one-shot copies it onto the goal's `Ideas model:` line, where the lead reads it.
     ideas_model = _text(lead, "ideas_model", "lead.") if "ideas_model" in lead else "inherit"
 

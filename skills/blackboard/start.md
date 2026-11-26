@@ -14,8 +14,8 @@ first round writes those.
    - **Max open intents** (default 4) and **claim minutes**, which is how long a worker holds an intent before it is
      treated as abandoned (default 60). Max open intents should be at least the number of workers plus one, so a worker
      that finishes finds the next intent already waiting.
-   - **Ideas model** (default `inherit`): the model a struggling lead asks for ideas. Do not ask about it unless the
-     person raises it.
+   - **Ideas model** (default `inherit`): the model of the sub-agent that the lead asks for ideas when it is stuck. Do
+     not ask about it unless the person raises it.
 3. **Draft the rules.** Draft them from their answers and from the workspace in front of you: its README, test and build
    commands, and any scripts that measure what the goal cares about. Use the rules template below, then show the draft
    to the person and ask for changes or approval. Do not write rules the person has not approved.
@@ -66,7 +66,7 @@ Max open intents: <n>
 Max intents: <n, or none>
 Claim minutes: <n>
 Measure: <yes if a measurement must confirm the goal before it is concluded, otherwise no>
-Ideas model: <the model a struggling lead asks for ideas: inherit (the lead's own), a model name, or none>
+Ideas model: <the model of the sub-agent the lead asks for ideas when stuck: inherit, a model name, or none>
 Started: <ISO date> by <the person>
 ```
 
