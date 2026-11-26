@@ -1,6 +1,7 @@
-// The Cytoscape graph of a board: styling, layout, and applying a diff without re-laying out the whole graph.
+// The Cytoscape graph of a board: styling, the band layout (`bands.js`) applied with the preset layout, and applying a
+// diff, moving nodes only when the structure changed.
+import { bandLayout, COL_W, edgeKey, fitViewport, goalLinks, sameViewport, structureChanged } from './bands.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
-import { freeSlot } from './placement.js';
 
 const COLOUR = {
   goal: '#a855f7',
@@ -32,6 +33,8 @@ const STYLE = [
       height: 22,
       'transition-property': 'opacity',
       'transition-duration': '600ms',
+      'z-index-compare': 'manual',
+      'z-index': 10,
     },
   },
   ...['goal', 'intent', 'fact', 'hint', 'conclusion'].map((k) => ({
@@ -62,22 +65,61 @@ const STYLE = [
       'curve-style': 'bezier',
       'transition-property': 'opacity',
       'transition-duration': '600ms',
+      'z-index-compare': 'manual',
+      'z-index': 5,
     },
   },
   { selector: 'edge.type-supersedes', style: { 'line-style': 'dashed' } },
+  // A drawn goal link to an intent that links to nothing: faint, dashed, straight, no arrow.
+  {
+    selector: 'edge.scaffold',
+    style: {
+      width: 1,
+      'line-style': 'dashed',
+      'line-dash-pattern': [4, 4],
+      'curve-style': 'straight',
+      'target-arrow-shape': 'none',
+      opacity: 0.45,
+    },
+  },
   { selector: 'edge.entering', style: { opacity: 0 } },
-  { selector: 'edge.scaffold', style: { display: 'none' } },
+  // Band separators and labels: behind everything, and transparent to the mouse, so a drag on them pans.
+  {
+    selector: 'node.band',
+    style: { events: 'no', 'text-events': 'no', 'z-index': 0, 'transition-property': 'none', 'background-opacity': 0 },
+  },
+  {
+    selector: 'node.band-line',
+    style: {
+      shape: 'rectangle',
+      width: 'data(w)',
+      height: 1,
+      label: '',
+      'background-color': '#374151',
+      'background-opacity': 1,
+    },
+  },
+  {
+    selector: 'node.band-label',
+    style: { width: 1, height: 1, color: '#6b7280', 'font-size': 11, 'text-valign': 'center', 'text-halign': 'right' },
+  },
 ];
 
 const FLASH_MS = 1000;
-const ROW_GAP = 90;
-/** At least this much room around a new node for its label, in case the label has not been measured yet. */
-const LABEL_EXTENT = { left: 40, top: 12, right: 40, bottom: 30 };
+/** How long nodes take to move to their new places after a structural change. */
+const MOVE_MS = 300;
+/** Fit padding and zoom bounds. A fit never zooms in past `maxZoom`, so a small board keeps a readable size. */
+const FIT = { padding: 30, minZoom: 0.2, maxZoom: 1.25 };
+/** How long a new element waits for an animation frame before its fade-in is started from a timer instead. */
+const FADE_FALLBACK_MS = 100;
 
 /**
  * @typedef {import('../../supabase/functions/_shared/types.ts').GraphNode} GraphNode
  * @typedef {import('../../supabase/functions/_shared/types.ts').GraphEdge} GraphEdge
  * @typedef {import('../../supabase/functions/_shared/types.ts').GraphResult} GraphResult
+ * @typedef {import('./bands.js').Band} Band
+ * @typedef {import('./bands.js').Point} Point
+ * @typedef {import('./bands.js').Viewport} Viewport
  * @typedef {{ added: string[]; removed: string[]; changed: string[] }} Diff
  */
 
@@ -99,12 +141,9 @@ function nodeClasses(n) {
 }
 
 /** @param {GraphEdge} e */
-const edgeId = (e) => `${e.from}|${e.to}|${e.type}`;
-
-/** @param {GraphEdge} e */
 const edgeEl = (e) => ({
   group: 'edges',
-  data: { id: edgeId(e), source: e.from, target: e.to, type: e.type },
+  data: { id: edgeKey(e), source: e.from, target: e.to, type: e.type },
   classes: [`type-${e.type}`],
 });
 
@@ -115,8 +154,19 @@ const edgeEl = (e) => ({
 export function createGraphView(container, opts) {
   const cytoscape = globalThis.cytoscape;
   if (typeof cytoscape !== 'function') throw new Error('Cytoscape did not load (vendor/cytoscape.min.js)');
-  const cy = cytoscape({ container, style: STYLE, minZoom: 0.2, maxZoom: 3 });
-  let needsLayout = false;
+  const cy = cytoscape({ container, style: STYLE, minZoom: FIT.minZoom, maxZoom: 3 });
+  /**
+   * The viewport the last fit set, or null until the board's first fit. While the view still equals it, the person
+   * has not panned or zoomed, so a re-layout or a resize fits again.
+   * @type {Viewport | null}
+   */
+  let fitted = null;
+  /** A fit skipped because the container had no size; the next resize does it. */
+  let needsFit = false;
+  /** The edges of the graph last drawn, to tell a structural change from a changed-only poll. @type {GraphEdge[]} */
+  let lastEdges = [];
+  /** Ends a move still running, putting every node at its final place at once. @type {(() => void) | null} */
+  let finishMove = null;
 
   cy.on('tap', 'node', (e) => opts.onSelect(e.target.id()));
   cy.on('mouseover', 'node', (e) => {
@@ -124,135 +174,155 @@ export function createGraphView(container, opts) {
   });
   cy.on('mouseout', 'node', () => container.removeAttribute('title'));
 
-  /**
-   * Breadth-first, top down, from the goal. Board links point from child to parent (a fact is `derived-from` its
-   * intent, the progress `depends-on` the goal), so the layout walks hidden reversed copies of the links, plus a hidden
-   * link from the goal to every node the walk would not otherwise reach. The drawn arrows keep their real direction.
-   */
-  function layout() {
-    if (container.clientWidth === 0 || cy.nodes().length === 0) {
-      needsLayout = cy.nodes().length > 0;
+  /** The memories: every node but the band separators and labels. */
+  const memNodes = () => cy.nodes().not('.band');
+  const userMoved = () => fitted !== null && !sameViewport({ zoom: cy.zoom(), pan: cy.pan() }, fitted);
+
+  /** Fit the whole graph, never zoomed in past FIT.maxZoom, set at once (no animation frame needed). */
+  function fit() {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (memNodes().empty()) return;
+    if (w === 0 || h === 0) {
+      needsFit = true;
       return;
     }
-    needsLayout = false;
-    const nodes = cy.nodes();
-    const goal = nodes.filter((n) => n.data('kind') === 'goal').first();
-    /** @type {Map<string, string[]>} */
-    const children = new Map();
-    const scaffold = [];
-    cy.edges().forEach((e) => {
-      const parent = e.target().id();
-      const child = e.source().id();
-      if (!children.has(parent)) children.set(parent, []);
-      children.get(parent)?.push(child);
-      scaffold.push({ parent, child });
-    });
-    const hasParent = new Set(scaffold.map((s) => s.child));
-    /** @type {string[]} */
-    const roots = goal.nonempty() ? [goal.id()] : nodes.filter((n) => !hasParent.has(n.id())).map((n) => n.id());
-    const reached = new Set();
-    /** @param {string} id */
-    const walk = (id) => {
-      const queue = [id];
-      while (queue.length) {
-        const cur = /** @type {string} */ (queue.shift());
-        if (reached.has(cur)) continue;
-        reached.add(cur);
-        queue.push(...(children.get(cur) ?? []));
-      }
-    };
-    roots.forEach(walk);
-    // Nodes come oldest first: the oldest node still unreached hangs from the goal (or becomes a root), then repeat.
-    nodes.forEach((n) => {
-      if (reached.has(n.id())) return;
-      if (goal.nonempty()) scaffold.push({ parent: goal.id(), child: n.id() });
-      else roots.push(n.id());
-      walk(n.id());
-    });
-    const hidden = cy.add(scaffold.map((s, i) => ({
-      group: 'edges',
-      data: { id: `scaffold-${i}`, source: s.parent, target: s.child },
-      classes: ['scaffold'],
-    })));
-    nodes.union(hidden).layout({
-      name: 'breadthfirst',
-      directed: true,
-      roots: cy.collection(roots.map((id) => cy.getElementById(id))),
-      spacingFactor: 1.1,
-      nodeDimensionsIncludeLabels: true,
-      padding: 30,
-      fit: true,
-      animate: false,
-    }).run();
-    hidden.remove();
+    needsFit = false;
+    cy.resize();
+    cy.viewport(fitViewport(cy.elements().boundingBox({}), w, h, FIT));
+    fitted = { zoom: cy.zoom(), pan: { ...cy.pan() } };
   }
 
   /**
-   * Place each new node one level below a placed node it links to (its parent), else any placed neighbour, else under
-   * the whole graph, in the nearest slot clear of other nodes and of edges (`freeSlot`). One level is the gap to the
-   * anchor's placed children, else ROW_GAP. Nodes come oldest first, so a new intent is placed before its new fact.
-   * @param {any} added the new nodes
+   * Replace the band separators and labels: a faint line across the graph at the top of each band after the first,
+   * and the band's name at its top left. They are nodes, so they pan and zoom with the graph.
+   * @param {Band[]} bands
+   * @param {Record<string, Point>} positions
    */
-  function place(added) {
-    const pending = new Set(added.map((/** @type {any} */ n) => n.id()));
-    const placed = (/** @type {any} */ n) => !pending.has(n.id());
-    added.forEach((/** @type {any} */ node) => {
-      const parent = node.outgoers('node').filter(placed).first();
-      const near = parent.nonempty() ? parent : node.neighborhood('node').filter(placed).first();
-      let anchor;
-      let rowGap = ROW_GAP;
-      if (near.nonempty()) {
-        anchor = near.position();
-        const below = near.incomers('node').filter(placed).map((/** @type {any} */ c) => c.position().y - anchor.y)
-          .filter((/** @type {number} */ d) => d > 0);
-        if (below.length) rowGap = Math.min(...below);
-      } else {
-        const bb = cy.nodes().filter(placed).boundingBox({});
-        anchor = Number.isFinite(bb.x1) ? { x: bb.x1, y: bb.y2 } : { x: 0, y: 0 };
-      }
-      const others = cy.nodes().filter(placed);
-      const segments = cy.edges().filter((/** @type {any} */ e) => placed(e.source()) && placed(e.target()))
-        .map((/** @type {any} */ e) => {
-          const a = e.source().position();
-          const b = e.target().position();
-          return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-        });
-      const pos = node.position();
-      const bb = node.boundingBox({});
-      const extent = {
-        left: Math.max(LABEL_EXTENT.left, pos.x - bb.x1),
-        top: Math.max(LABEL_EXTENT.top, pos.y - bb.y1),
-        right: Math.max(LABEL_EXTENT.right, bb.x2 - pos.x),
-        bottom: Math.max(LABEL_EXTENT.bottom, bb.y2 - pos.y),
-      };
-      const boxes = others.map((/** @type {any} */ n) => n.boundingBox({}));
-      node.position(freeSlot(anchor, { boxes, segments, extent, radius: node.width() / 2 }, { rowGap }));
-      pending.delete(node.id());
-    });
+  function drawBands(bands, positions) {
+    cy.remove(cy.nodes('.band'));
+    const xs = Object.values(positions).map((p) => p.x);
+    if (!xs.length) return;
+    const x1 = Math.min(...xs) - COL_W / 2;
+    const x2 = Math.max(...xs) + COL_W / 2;
+    const common = { group: 'nodes', selectable: false, grabbable: false, locked: true };
+    cy.add(bands.flatMap((b, i) => [
+      ...(i > 0
+        ? [{
+          ...common,
+          data: { id: `band-line|${i}`, w: x2 - x1 },
+          position: { x: (x1 + x2) / 2, y: b.y },
+          classes: ['band', 'band-line'],
+        }]
+        : []),
+      {
+        ...common,
+        data: { id: `band-label|${i}`, label: b.label },
+        position: { x: x1, y: b.y + 16 },
+        classes: ['band', 'band-label'],
+      },
+    ]));
+  }
+
+  /**
+   * Put every node where `bandLayout` says, with the preset layout. `animate` moves the nodes that were already drawn
+   * over MOVE_MS while new ones appear in place; with the page hidden it does not animate. A timer finishes the move
+   * if the layout's stop never comes (an occluded window may run no animation frames). Afterwards it fits, unless the
+   * person has panned or zoomed since the last fit.
+   * @param {GraphResult} graph
+   * @param {boolean} animate
+   */
+  function arrange(graph, animate) {
+    finishMove?.();
+    const { positions, bands } = bandLayout(graph);
+    drawBands(bands, positions);
+    const refit = !userMoved();
+    const nodes = memNodes();
+    const at = (/** @type {any} */ n) => positions[n.id()] ?? n.position();
+    let timer = 0;
+    let done = false;
+    const end = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      finishMove = null;
+      nodes.stop(true);
+      nodes.forEach((/** @type {any} */ n) => {
+        if (!n.removed()) n.position(at(n));
+      });
+      if (refit) fit();
+    };
+    if (!animate || document.visibilityState !== 'visible') {
+      nodes.layout({ name: 'preset', positions: at, fit: false, animate: false }).run();
+      end();
+      return;
+    }
+    finishMove = end;
+    timer = setTimeout(end, MOVE_MS + 200);
+    nodes.layout({
+      name: 'preset',
+      positions: at,
+      fit: false,
+      animate: true,
+      animationDuration: MOVE_MS,
+      animateFilter: (/** @type {any} */ n) => !n.hasClass('entering'),
+      stop: end,
+    }).run();
+  }
+
+  /**
+   * Draw a goal link to each intent that links to nothing (`goalLinks`) and drop those no longer needed. They carry
+   * the class `scaffold`: the diff sync never touches them, and the drawer reads the memory's own links instead.
+   * @param {GraphResult} graph
+   * @returns {any} the goal links added
+   */
+  function syncGoalLinks(graph) {
+    const want = new Map(goalLinks(graph).map((s) => [`goal-link|${s.parent}|${s.child}`, s]));
+    cy.edges('.scaffold').filter((/** @type {any} */ e) => !want.has(e.id())).remove();
+    return cy.add(
+      [...want].filter(([id]) => cy.getElementById(id).empty()).map(([id, s]) => ({
+        group: 'edges',
+        data: { id, source: s.parent, target: s.child },
+        classes: ['scaffold'],
+      })),
+    );
   }
 
   /** @param {any} eles */
   function fadeIn(eles) {
-    // Next frame, so the opacity transition starts from 0.
-    requestAnimationFrame(() => eles.removeClass('entering'));
+    if (eles.empty()) return;
+    // Next frame, so the opacity transition starts from 0. A timer too: an occluded window may never run a frame, and
+    // the new elements must not stay invisible. Whichever comes second does nothing.
+    const show = () => eles.removeClass('entering');
+    requestAnimationFrame(show);
+    setTimeout(show, FADE_FALLBACK_MS);
   }
 
   return {
     /**
-     * Draw `graph`. With no previous drawing (or `diff` null) it lays out everything; otherwise it applies `diff`:
-     * new elements fade in near a connected node, changed nodes update and flash, removed ones go.
+     * Draw `graph`. With no previous drawing (or `diff` null) it lays out everything and fits; otherwise it applies
+     * `diff`: changed nodes update and flash, and when nodes or links were added or removed, new elements fade in and
+     * every node moves to its new place. A poll that only changed nodes moves nothing.
      * @param {GraphResult} graph
      * @param {Diff | null} diff
      */
     render(graph, diff) {
       const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-      if (diff === null || cy.nodes().length === 0) {
+      const edges = graph.edges.filter((e) => byId.has(e.from) && byId.has(e.to));
+      const shape = { ...graph, edges };
+      if (diff === null || memNodes().empty()) {
+        finishMove?.();
         cy.elements().remove();
         cy.add(graph.nodes.map((n) => ({ group: 'nodes', data: nodeData(n), classes: nodeClasses(n) })));
-        cy.add(graph.edges.filter((e) => byId.has(e.from) && byId.has(e.to)).map(edgeEl));
-        layout();
+        cy.add(edges.map(edgeEl));
+        syncGoalLinks(shape);
+        lastEdges = edges;
+        fitted = null;
+        arrange(shape, false);
         return;
       }
+      const structural = structureChanged(diff, lastEdges, edges);
+      lastEdges = edges;
       cy.batch(() => {
         for (const id of diff.removed) cy.getElementById(id).remove();
         for (const id of diff.changed) {
@@ -264,31 +334,36 @@ export function createGraphView(container, opts) {
           setTimeout(() => el.removeClass('flash'), FLASH_MS);
         }
       });
+      if (!structural) return;
       const fresh = diff.added.flatMap((id) => {
         const n = byId.get(id);
         return n ? [{ group: 'nodes', data: nodeData(n), classes: [...nodeClasses(n), 'entering'] }] : [];
       });
       const addedNodes = cy.add(fresh);
-      const want = new Set(graph.edges.map(edgeId));
-      cy.edges().filter((e) => !want.has(e.id())).remove();
-      const newEdges = graph.edges.filter((e) =>
-        byId.has(e.from) && byId.has(e.to) && cy.getElementById(edgeId(e)).empty()
-      );
+      const want = new Set(edges.map(edgeKey));
+      cy.edges().not('.scaffold').filter((/** @type {any} */ e) => !want.has(e.id())).remove();
+      const newEdges = edges.filter((e) => cy.getElementById(edgeKey(e)).empty());
       const addedEdges = cy.add(newEdges.map((e) => ({ ...edgeEl(e), classes: [`type-${e.type}`, 'entering'] })));
-      place(addedNodes);
-      fadeIn(addedNodes.union(addedEdges));
+      const addedLinks = syncGoalLinks(shape).addClass('entering');
+      arrange(shape, true);
+      fadeIn(addedNodes.union(addedEdges).union(addedLinks));
     },
 
-    /** Remove everything, for a board switch. */
+    /** Remove everything and reset zoom and pan, for a board switch. */
     clear() {
+      finishMove?.();
       cy.elements().remove();
-      needsLayout = false;
+      cy.viewport({ zoom: 1, pan: { x: 0, y: 0 } });
+      fitted = null;
+      needsFit = false;
+      lastEdges = [];
     },
 
-    /** Call when the container's size changes: a layout skipped while it was hidden runs now. */
+    /** Call when the container's size changes: fit again unless the person has panned or zoomed since the last fit. */
     resize() {
       cy.resize();
-      if (needsLayout) layout();
+      finishMove?.();
+      if (needsFit || !userMoved()) fit();
     },
   };
 }

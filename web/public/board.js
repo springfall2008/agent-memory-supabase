@@ -81,10 +81,7 @@ export function mountBoard(el, opts) {
       boards = res.boards;
       const placeholder = option('', boards.length ? 'Choose a board…' : 'No boards found');
       placeholder.disabled = true;
-      picker.replaceChildren(
-        placeholder,
-        ...boards.map((b, i) => option(String(i), `${b.board} · ${b.scope}${b.state ? ` (${b.state})` : ''}`)),
-      );
+      picker.replaceChildren(placeholder, ...boards.map((b, i) => option(String(i), boardLabel(b))));
       more.textContent = res.more ? 'More boards exist than this list shows.' : '';
       syncPicker();
     } catch (e) {
@@ -93,6 +90,21 @@ export function mountBoard(el, opts) {
     } finally {
       reload.removeAttribute('disabled');
     }
+  }
+
+  /**
+   * Keep the picker's text for the shown board in step with its goal's `state:` tag, so a board that finished stops
+   * saying "(running)" without a list refresh.
+   * @param {Target} t
+   * @param {string | null} state
+   */
+  function syncPickerState(t, state) {
+    if (t.kind !== 'board') return;
+    const i = boards.findIndex((b) => b.scope === t.scope && b.board === t.board);
+    if (i < 0 || boards[i].state === state) return;
+    boards[i] = { ...boards[i], state };
+    const opt = [...picker.options].find((o) => o.value === String(i));
+    if (opt) opt.textContent = boardLabel(boards[i]);
   }
 
   picker.addEventListener('change', () => {
@@ -187,6 +199,8 @@ export function mountBoard(el, opts) {
     }
     view?.render(graph, me.prev === null ? null : diff);
     me.prev = graph;
+    const goal = graph.nodes.find((/** @type {any} */ n) => kindOf(n.tags) === 'goal');
+    if (goal) syncPickerState(t, stateOf(goal.tags));
     me.refreshed = new Date();
   }
 
@@ -285,6 +299,11 @@ export function mountBoard(el, opts) {
       return n ? shortName(n.snippet ?? n.content ?? '').label : null;
     },
   };
+}
+
+/** @param {BoardInfo} b */
+function boardLabel(b) {
+  return `${b.board} · ${b.scope}${b.state ? ` (${b.state})` : ''}`;
 }
 
 /** @param {unknown} e */

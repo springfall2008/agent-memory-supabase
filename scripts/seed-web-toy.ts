@@ -1,9 +1,10 @@
 // Seeds a small blackboard, tagged board:toy-ui, for checking the web UI by eye. Local database only: it always uses
 // the fixed local URL, never AGENT_MEMORY_DB_URL or .env.
-//   deno run -A scripts/seed-web-toy.ts --seed <scope>              goal, rules, progress, two intents (one claimed),
-//                                                                   a fact and a hint: 7 memories
+//   deno run -A scripts/seed-web-toy.ts --seed <scope>              goal, rules, progress, two round:1 intents (one
+//                                                                   claimed), a fact and a hint: 7 memories
 //   deno run -A scripts/seed-web-toy.ts --seed <scope> --goal-only  the goal alone ("No intents yet.")
-//   deno run -A scripts/seed-web-toy.ts --advance                   a live change: a refuted fact appears, intent 1 is done
+//   deno run -A scripts/seed-web-toy.ts --advance                   a live change: a refuted fact appears, intent 1 is
+//                                                                   done, and a round:2 intent cites the first fact
 //   deno run -A scripts/seed-web-toy.ts --clean                     delete every board:toy-ui memory, with links and claims
 // The scope must exist and have a member with write access (the seeded rows are created by, and claimed for, that
 // member).
@@ -73,6 +74,7 @@ async function seed(sql: Sql, scope: string, goalOnly: boolean): Promise<void> {
     const i1 = await insert(tx, s.id, who, 'Intent: measure whether n = 7 passes the check\nWhy: round 1', [
       'kind:intent',
       'state:open',
+      'round:1',
     ], 50);
     const fact = await insert(
       tx,
@@ -86,6 +88,7 @@ async function seed(sql: Sql, scope: string, goalOnly: boolean): Promise<void> {
     const i2 = await insert(tx, s.id, who, 'Intent: try n = 5 with the faster parser\nWhy: the fact above', [
       'kind:intent',
       'state:open',
+      'round:1',
     ], 30);
     await link(tx, i2, fact, 'derived-from', who);
     await tx`
@@ -104,6 +107,7 @@ async function advance(sql: Sql): Promise<void> {
     select id, scope_id, created_by from agent_memory.memories
     where tags @> array[${TAG}, 'kind:intent'] and deleted_at is null order by created_at`;
   if (intents.length < 2) fail(`Seed a full ${TAG} board first`);
+  if (intents.length > 2) fail(`The ${TAG} board was already advanced; run --clean and --seed first`);
   const [i1, i2] = intents;
   await sql.begin(async (tx) => {
     const fact = await insert(
@@ -117,10 +121,24 @@ async function advance(sql: Sql): Promise<void> {
     await link(tx, fact, i2.id, 'derived-from', i2.created_by);
     await tx`delete from agent_memory.memory_claims where memory_id = ${i2.id}`;
     await tx`
-      update agent_memory.memories set tags = array[${TAG}, 'kind:intent', 'state:done'], updated_at = now()
+      update agent_memory.memories set tags = array_replace(tags, 'state:open', 'state:done'), updated_at = now()
       where id = ${i1.id}`;
+    const [first] = await tx`
+      select l.from_id from agent_memory.memory_links l
+      where l.to_id = ${i1.id} and l.type = 'derived-from' limit 1`;
+    const i3 = await insert(
+      tx,
+      i2.scope_id,
+      i2.created_by,
+      'Intent: check n = 6 under the same parser\nWhy: the first fact',
+      ['kind:intent', 'state:open', 'round:2'],
+      0,
+    );
+    if (first) await link(tx, i3, first.from_id, 'derived-from', i2.created_by);
   });
-  console.log('Added a refuted fact for intent 2, released its claim, and marked intent 1 done');
+  console.log(
+    'Added a refuted fact for intent 2, released its claim, marked intent 1 done, and added a round 2 intent',
+  );
 }
 
 /** Deletes the seeded rows by the literal tag; links and claims cascade, then the history the trigger writes. */

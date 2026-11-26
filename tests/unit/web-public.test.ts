@@ -6,7 +6,15 @@ import { nextDelay, POLL_MS } from '../../web/public/poll.js';
 import { parseStatus } from '../../web/public/status.js';
 import { applyChunk, emptyLog } from '../../web/public/logbuf.js';
 import { boardHash, parseHash, tagHash } from '../../web/public/route.js';
-import { distanceToSegment, freeSlot } from '../../web/public/placement.js';
+import {
+  bandLayout,
+  COL_W,
+  fitViewport,
+  goalLinks,
+  roundGroups,
+  sameViewport,
+  structureChanged,
+} from '../../web/public/bands.js';
 
 // ── names ──────────────────────────────────────────────────────────
 
@@ -264,50 +272,215 @@ Deno.test('boardHash and tagHash round-trip through parseHash, slashes included'
   assertEquals(parseHash(tagHash('board:a/b#c')), { tab: 'board', tag: 'board:a/b#c' });
 });
 
-// ── placement ──────────────────────────────────────────────────────
+// ── bands ──────────────────────────────────────────────────────────
 
-const EXTENT = { left: 20, top: 12, right: 20, bottom: 30 };
-const box = (x: number, y: number) => ({ x1: x - 20, y1: y - 12, x2: x + 20, y2: y + 30 });
+const T0 = Date.parse('2026-01-01T00:00:00Z');
+/** A board memory of `kind`, created `min` minutes after T0. */
+const mem = (id: string, kind: string, min: number, extra: { tags?: string[]; snippet?: string } = {}) => ({
+  id,
+  tags: [`kind:${kind}`, ...(extra.tags ?? [])],
+  createdAt: new Date(T0 + min * 60_000).toISOString(),
+  snippet: extra.snippet ?? `${id}`,
+});
+type LayoutNode = { id: string; tags: string[]; createdAt: string; snippet?: string };
+type Edge = { from: string; to: string; type: string };
+const link = (from: string, to: string, type = 'derived-from'): Edge => ({ from, to, type });
+const board = (nodes: LayoutNode[], edges: Edge[] = []) => ({ nodes, edges });
+const header = () => [mem('goal', 'goal', 0), mem('rules', 'rules', 0.1), mem('progress', 'progress', 0.2)];
+const headerLinks = () => [link('rules', 'goal', 'depends-on'), link('progress', 'goal', 'depends-on')];
 
-Deno.test('distanceToSegment measures to the nearest point, ends included', () => {
-  const s = { x1: 0, y1: 0, x2: 0, y2: 100 };
-  assertEquals(distanceToSegment({ x: 5, y: 50 }, s), 5);
-  assertEquals(distanceToSegment({ x: 0, y: 130 }, s), 30);
-  assertEquals(distanceToSegment({ x: 3, y: 4 }, { x1: 0, y1: 0, x2: 0, y2: 0 }), 5);
+/** The predbat-memory shape, untagged, as the old brief gives it. */
+function predbatShape() {
+  const nodes = [
+    ...header(),
+    mem('A', 'intent', 1),
+    mem('F1', 'fact', 5),
+    mem('B', 'intent', 10),
+    mem('C', 'intent', 10.5),
+    mem('FB1', 'fact', 14),
+    mem('FB2', 'fact', 15),
+    mem('HB1', 'hint', 15.5),
+    mem('FB3', 'fact', 16),
+    mem('HB2', 'hint', 16.5),
+    mem('D', 'intent', 20),
+    mem('FD', 'fact', 25),
+  ];
+  const edges = [
+    ...headerLinks(),
+    link('F1', 'A'),
+    link('B', 'F1'),
+    link('C', 'F1'),
+    link('FB1', 'B'),
+    link('FB2', 'B'),
+    link('FB3', 'B'),
+    link('HB1', 'B', 'relates-to'),
+    link('HB2', 'B', 'relates-to'),
+    link('D', 'F1'),
+    link('D', 'FB1'),
+    link('FD', 'D'),
+  ];
+  return board(nodes, edges);
+}
+
+Deno.test('bandLayout puts the goal at the top centre with rules and progress beside it', () => {
+  const { positions, bands } = bandLayout(board(header(), headerLinks()));
+  assertEquals(positions.goal.x, 0);
+  assertEquals(positions.rules.y, positions.goal.y);
+  assertEquals(positions.progress.y, positions.goal.y);
+  assertEquals([positions.rules.x, positions.progress.x], [COL_W, -COL_W]);
+  assertEquals(bands.map((b) => b.label), ['Goal']);
 });
 
-Deno.test('freeSlot goes straight below the anchor when nothing is there', () => {
-  const scene = { boxes: [box(0, 0)], segments: [], extent: EXTENT, radius: 11 };
-  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90 }), { x: 0, y: 90 });
+Deno.test('bandLayout gives two tagged rounds two bands in order, intents on each band row', () => {
+  const g = board([
+    ...header(),
+    mem('i1', 'intent', 1, { tags: ['round:1'] }),
+    mem('i2', 'intent', 1.2, { tags: ['round:1'] }),
+    mem('i3', 'intent', 30, { tags: ['round:2'] }),
+    mem('i4', 'intent', 30.1, { tags: ['round:2'] }),
+  ], headerLinks());
+  const { positions: p, bands } = bandLayout(g);
+  assertEquals(bands.map((b) => b.label), ['Goal', 'Round 1', 'Round 2']);
+  assertEquals(p.i1.y, p.i2.y);
+  assertEquals(p.i3.y, p.i4.y);
+  assert(p.goal.y < p.i1.y && p.i1.y < p.i3.y);
+  assert(p.i1.y > bands[1].y && p.i1.y < bands[1].y + bands[1].height);
+  assert(p.i3.y > bands[2].y && p.i3.y < bands[2].y + bands[2].height);
+  assertEquals([p.i1.x, p.i2.x], [-COL_W / 2, COL_W / 2]);
 });
 
-Deno.test('freeSlot moves sideways off an edge that runs down from the anchor', () => {
-  // The anchor's existing child sits two levels down, so its edge passes through the spot one level below.
-  const scene = {
-    boxes: [box(0, 0), box(0, 180)],
-    segments: [{ x1: 0, y1: 180, x2: 0, y2: 0 }],
-    extent: EXTENT,
-    radius: 11,
-  };
-  const spot = freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40 });
-  assertEquals(spot, { x: 40, y: 90 });
-  assert(distanceToSegment(spot, scene.segments[0]) >= 11 + 14);
+Deno.test('bandLayout puts a fact directly below its intent, results stacked in creation order', () => {
+  const g = board(
+    [
+      mem('i1', 'intent', 1),
+      mem('f1', 'fact', 2),
+      mem('p1', 'hint', 3, { snippet: 'Partial result for intent i1: half done' }),
+    ],
+    [link('f1', 'i1'), link('p1', 'i1', 'relates-to')],
+  );
+  const { positions: p } = bandLayout(g);
+  assertEquals(p.f1.x, p.i1.x);
+  assertEquals(p.p1.x, p.i1.x);
+  assert(p.i1.y < p.f1.y && p.f1.y < p.p1.y);
 });
 
-Deno.test('freeSlot skips slots whose box overlaps a node, trying +step then -step outwards', () => {
-  const scene = { boxes: [box(0, 90), box(40, 90)], segments: [], extent: EXTENT, radius: 11 };
-  // 0 and +40 overlap; -40 overlaps the node at 0 (boxes 40 wide, margin 6); +80 overlaps +40; -80 is clear.
-  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40 }), { x: -80, y: 90 });
+Deno.test('bandLayout puts a fact derived from two intents under the earlier one', () => {
+  const g = board(
+    [mem('i1', 'intent', 1), mem('i2', 'intent', 1.5), mem('f', 'fact', 3)],
+    [link('f', 'i2'), link('f', 'i1')],
+  );
+  const { positions: p } = bandLayout(g);
+  assertEquals(p.f.x, p.i1.x);
 });
 
-Deno.test('freeSlot drops a row when the first row is full, and is deterministic', () => {
-  const scene = {
-    boxes: [{ x1: -1000, y1: 70, x2: 1000, y2: 110 }],
-    segments: [],
-    extent: EXTENT,
-    radius: 11,
-  };
-  const a = freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40, maxSteps: 10 });
-  assertEquals(a, { x: 0, y: 180 });
-  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40, maxSteps: 10 }), a);
+Deno.test('roundGroups splits untagged intents at a gap over 2 minutes and keeps closer ones together', () => {
+  const groups = roundGroups([
+    mem('a', 'intent', 0),
+    mem('b', 'intent', 1.5),
+    mem('c', 'intent', 3),
+    mem('d', 'intent', 5.5),
+  ]);
+  assertEquals(groups.map((g) => g.intents.map((n) => n.id)), [['a', 'b', 'c'], ['d']]);
+  const { bands } = bandLayout(board([mem('a', 'intent', 0), mem('d', 'intent', 5.5)]));
+  assertEquals(bands.map((b) => b.label), ['Batch 1', 'Batch 2']);
+});
+
+Deno.test('roundGroups joins an untagged group to a tagged round it is within 2 minutes of, else its own band', () => {
+  const groups = roundGroups([
+    mem('t1', 'intent', 0, { tags: ['round:1'] }),
+    mem('u1', 'intent', 1),
+    mem('u2', 'intent', 10),
+    mem('t2', 'intent', 20, { tags: ['round:2'] }),
+  ]);
+  assertEquals(groups.map((g) => [g.round, g.intents.map((n) => n.id)]), [
+    [1, ['t1', 'u1']],
+    [null, ['u2']],
+    [2, ['t2']],
+  ]);
+  const { bands } = bandLayout(board(groups.flatMap((g) => g.intents)));
+  assertEquals(bands.map((b) => b.label), ['Round 1', 'Batch 2', 'Round 2']);
+});
+
+Deno.test('bandLayout puts a lead fact for intent none in the side lane of the band its time falls in', () => {
+  const g = board([
+    ...header(),
+    mem('i1', 'intent', 1),
+    mem('i2', 'intent', 1.5),
+    mem('f1', 'fact', 3),
+    mem('lead', 'fact', 4, { snippet: 'Fact for intent none: the cache is cold' }),
+    mem('i3', 'intent', 20),
+  ], [...headerLinks(), link('f1', 'i1')]);
+  const { positions: p } = bandLayout(g);
+  assert(p.lead.x > Math.max(p.i1.x, p.i2.x));
+  assertEquals(p.lead.y, p.f1.y);
+  assert(p.lead.y < p.i3.y);
+});
+
+Deno.test('bandLayout puts the conclusion in its own band at the bottom, centred', () => {
+  const g = board(
+    [...header(), mem('i1', 'intent', 1), mem('f1', 'fact', 2), mem('end', 'conclusion', 3)],
+    [...headerLinks(), link('f1', 'i1'), link('end', 'f1')],
+  );
+  const { positions: p, bands } = bandLayout(g);
+  assertEquals(p.end.x, 0);
+  assert(Object.entries(p).every(([id, q]) => id === 'end' || q.y < p.end.y));
+  assertEquals(bands.at(-1)?.label, 'Conclusion');
+});
+
+Deno.test('bandLayout: adding nodes to the newest band leaves earlier bands where they were', () => {
+  const before = predbatShape();
+  const after = board(
+    [...before.nodes, mem('E', 'intent', 20.5), mem('FD2', 'fact', 26), mem('lead', 'fact', 27)],
+    [...before.edges, link('E', 'FB2'), link('FD2', 'D')],
+  );
+  const a = bandLayout(before).positions;
+  const b = bandLayout(after).positions;
+  for (const id of ['goal', 'rules', 'progress', 'A', 'F1', 'B', 'C', 'FB1', 'FB2', 'FB3', 'HB1', 'HB2']) {
+    assertEquals(b[id], a[id], id);
+  }
+  assertEquals(bandLayout(after), bandLayout(after));
+});
+
+Deno.test('bandLayout lays out the predbat-memory shape in time bands with no two nodes overlapping', () => {
+  const g = predbatShape();
+  const { positions: p, bands } = bandLayout(g);
+  assertEquals(bands.map((b) => b.label), ['Goal', 'Batch 1', 'Batch 2', 'Batch 3']);
+  assertEquals(Object.keys(p).sort(), g.nodes.map((n) => n.id).sort());
+  const pts = Object.values(p);
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      assert(Math.abs(pts[i].x - pts[j].x) >= COL_W || Math.abs(pts[i].y - pts[j].y) >= 60, `${i} vs ${j}`);
+    }
+  }
+  // Every child sits below what it links to (rules and progress sit beside the goal), each result under its intent.
+  for (const e of g.edges.filter((e) => e.to !== 'goal')) assert(p[e.from].y > p[e.to].y, `${e.from} below ${e.to}`);
+  for (const id of ['FB1', 'FB2', 'FB3']) assertEquals(p[id].x, p.B.x);
+  assert(p.HB1.x > Math.max(p.B.x, p.C.x), 'free hints go to the side lane');
+});
+
+Deno.test('goalLinks links the goal to intents that link to nothing, and none without a goal', () => {
+  const g = predbatShape();
+  assertEquals(goalLinks(g), [{ parent: 'goal', child: 'A' }]);
+  assertEquals(goalLinks(board([mem('i', 'intent', 0)])), []);
+});
+
+Deno.test('structureChanged sees nodes and links come and go, not changed-only polls', () => {
+  const e = [link('a', 'b')];
+  assertEquals(structureChanged({ added: [], removed: [] }, e, [link('a', 'b')]), false);
+  assertEquals(structureChanged({ added: ['c'], removed: [] }, e, e), true);
+  assertEquals(structureChanged({ added: [], removed: ['c'] }, e, e), true);
+  assertEquals(structureChanged({ added: [], removed: [] }, e, [...e, link('c', 'b')]), true);
+  assertEquals(structureChanged({ added: [], removed: [] }, e, [link('a', 'b', 'relates-to')]), true);
+});
+
+Deno.test('fitViewport centres the box and never zooms in past maxZoom', () => {
+  const opts = { padding: 30, minZoom: 0.2, maxZoom: 1.25 };
+  const small = fitViewport({ x1: -50, y1: 0, x2: 50, y2: 100 }, 1000, 600, opts);
+  assertEquals(small.zoom, 1.25);
+  assertEquals(small.pan, { x: 500, y: 300 - 1.25 * 50 });
+  const big = fitViewport({ x1: 0, y1: 0, x2: 1880, y2: 540 }, 1000, 600, opts);
+  assertEquals(big.zoom, 0.5);
+  assertEquals(fitViewport({ x1: 0, y1: 0, x2: 100000, y2: 10 }, 1000, 600, opts).zoom, 0.2);
+  assert(sameViewport(big, { zoom: 0.5, pan: { ...big.pan } }));
+  assert(!sameViewport(big, { zoom: 0.5, pan: { x: big.pan.x + 1, y: big.pan.y } }));
 });

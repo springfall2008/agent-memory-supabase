@@ -1,7 +1,7 @@
 // The app shell: the Browse | Board tabs, hash routing, and the shared node/row selection.
 import { mountBoard } from './board.js';
 import { mountBrowse } from './browse.js';
-import { openDrawer } from './drawer.js';
+import { closeDrawer, openDrawer } from './drawer.js';
 import { parseHash, tagHash } from './route.js';
 
 const tabs = {
@@ -58,6 +58,8 @@ function route() {
   // Only a different board restarts the poll; flipping tabs keeps the live graph.
   const key = 'scope' in r ? `b\n${r.scope}\n${r.board}` : 'tag' in r ? `t\n${r.tag}` : shownKey;
   if (key === shownKey) return;
+  // The drawer shows a memory from before the switch; close it rather than leave it over the new graph.
+  closeDrawer();
   shownKey = key;
   if ('scope' in r) {
     boardContext = { scope: r.scope, board: r.board };
