@@ -1,7 +1,11 @@
-# agent-memory-supabase
+# Agent Memory Superbase
 
 Shared, hosted memory for AI agents, built on [Supabase](https://supabase.com/). An MCP server, run as a Supabase
 Edge Function, gives agents persistent memory they can store into and search, from any machine or cloud session.
+
+Memories can be used to orchestrate agents working on solving complex problems.
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/53a508d5-4a56-447a-afdd-74079d6292e2" />
 
 Memories live in **scopes** (named memory pools, such as `predbat-devs`). An admin grants each member read-only or
 read-write access per scope, and Postgres row-level security enforces it. Several developers and their bots can
