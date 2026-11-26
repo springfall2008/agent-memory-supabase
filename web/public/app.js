@@ -1,7 +1,7 @@
 // The app shell: the Browse | Board tabs, hash routing, and the shared node/row selection.
 import { mountBoard } from './board.js';
 import { mountBrowse } from './browse.js';
-import { closeDrawer, openDrawer } from './drawer.js';
+import { closeDrawer, openDrawer, refreshDrawer } from './drawer.js';
 import { parseHash, tagHash } from './route.js';
 
 const tabs = {
@@ -20,7 +20,7 @@ let shownKey = '';
 
 /**
  * Open the drawer from the Board graph, which knows the shown board and the short names of its nodes. On a board
- * view (not a tag view) the drawer also gets what its write forms need.
+ * view (not a tag view) the drawer also gets what its shortcuts need.
  * @param {string} id
  */
 function onBoardSelect(id) {
@@ -36,7 +36,8 @@ function onBoardSelect(id) {
 }
 
 const browse = { mounted: false };
-const board = mountBoard(panels.board, { onSelect: onBoardSelect });
+// After each graph poll the drawer redraws what it takes from the graph, such as the goal's list of amendments.
+const board = mountBoard(panels.board, { onSelect: onBoardSelect, onPoll: refreshDrawer });
 
 /** @param {'browse' | 'board'} which */
 function showTab(which) {

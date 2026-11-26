@@ -1,11 +1,10 @@
-// The drawer's write forms, on the Board tab only: Add hint on every node, Add intent on the goal and on facts while
-// the board runs, and on the goal its amendments, Add amendment and the board controls (`controls.js`). Every form is
-// disabled while its request is in flight; success clears it and polls the graph at once; failure shows the server's
-// text. All text goes in through textContent.
+// The write forms: Add hint, Add intent and Add amendment, opened from the Board tab's toolbar (`toolbar.js`) for the
+// whole board, and the drawer's two shortcuts, "Hint about this node" and "Try next from this fact", with the goal
+// drawer's list of amendments. Every form is disabled while its request is in flight; success clears it and polls the
+// graph at once; failure shows the server's text. All text goes in through textContent.
 import { postJson } from './api.js';
-import { goalControls } from './controls.js';
 import { h } from './dom.js';
-import { kindOf, shortName, stateOf } from './names.js';
+import { kindOf, shortName } from './names.js';
 import { runWrite, say, statusLine } from './sending.js';
 import { field } from './status.js';
 import {
@@ -52,10 +51,10 @@ function textField(label, opts) {
 }
 
 /**
- * A form box: a title, its fields, an optional note, a submit button and a status line. `body` gives the request
+ * A form box: an optional title, its fields, an optional note, a submit button and a status line. `body` gives the request
  * body from the trimmed values, or a reason to send nothing.
  * @param {{
- *   title: string;
+ *   title?: string;
  *   fields: { el: HTMLElement; input: HTMLInputElement | HTMLTextAreaElement }[];
  *   notes?: HTMLElement[];
  *   submit: string;
@@ -71,7 +70,8 @@ function writeForm(spec, ctx, hooks) {
   const button = /** @type {HTMLButtonElement} */ (h('button', '', spec.submit));
   button.type = 'submit';
   const line = statusLine();
-  form.append(h('h3', 'write-title', spec.title), ...spec.fields.map((f) => f.el), ...(spec.notes ?? []));
+  if (spec.title) form.append(h('h3', 'write-title', spec.title));
+  form.append(...spec.fields.map((f) => f.el), ...(spec.notes ?? []));
   const row = h('div', 'write-actions');
   row.append(button, line);
   form.append(row);
@@ -86,6 +86,8 @@ function writeForm(spec, ctx, hooks) {
     }
     const r = await runWrite([...inputs, button], line, hooks, ctx, () => postJson(spec.path, body));
     if (!hooks.live()) return;
+    // Disabling the form while it sent dropped the focus; put it back in the form, so Escape and typing still reach it.
+    if (!form.contains(document.activeElement) && document.activeElement === document.body) focusForm(form);
     if (!r.ok) {
       say(line, 'error', r.error);
       return;
@@ -106,29 +108,43 @@ function writeForm(spec, ctx, hooks) {
 
 const EMPTY = 'Write something first.';
 
-/** @param {Memory} m @param {WriteCtx} ctx @param {Hooks} hooks */
-function hintForm(m, ctx, hooks) {
+/**
+ * Add hint: about a node from the drawer's shortcut, or for the whole board from the toolbar.
+ * @param {Memory | null} about the node, or null for a board-wide hint with no `about`
+ * @param {WriteCtx} ctx
+ * @param {Hooks} hooks
+ */
+export function hintForm(about, ctx, hooks) {
   const text = textField('Hint', { multiline: true, max: TEXT_MAX, placeholder: 'something the workers should know' });
-  const where = hintLinks(m.tags)
-    ? `Linked to this ${kindOf(m.tags)}.`
+  const where = about === null
+    ? 'Board-wide: advice for the lead, read at its next round.'
+    : hintLinks(about.tags)
+    ? `Linked to this ${kindOf(about.tags)}.`
     : 'Board-wide: on this memory a hint links to nothing.';
   return writeForm(
     {
-      title: 'Add hint',
+      ...(about === null ? { title: 'Add hint' } : {}),
       fields: [text],
       notes: [h('p', 'note', where)],
       submit: 'Add hint',
       path: '/hints',
-      body: ([t]) => (t ? { scope: ctx.scope, board: ctx.board, text: t, about: m.id } : EMPTY),
+      body: ([t]) => {
+        if (!t) return EMPTY;
+        return { scope: ctx.scope, board: ctx.board, text: t, ...(about === null ? {} : { about: about.id }) };
+      },
     },
     ctx,
     hooks,
   );
 }
 
-/** @param {Memory} m @param {WriteCtx} ctx @param {Hooks} hooks */
-function intentForm(m, ctx, hooks) {
-  const onFact = kindOf(m.tags) === 'fact';
+/**
+ * Add intent: from a fact through the drawer's "Try next from this fact", or for the whole board from the toolbar.
+ * @param {Memory | null} from the fact it builds on, or null for an intent with no `from`
+ * @param {WriteCtx} ctx
+ * @param {Hooks} hooks
+ */
+export function intentForm(from, ctx, hooks) {
   const fields = [
     textField('Try', { multiline: true, max: TEXT_MAX, placeholder: 'what a worker should try' }),
     textField('Done when (optional)', { max: FIELD_MAX, placeholder: PRODUCE_DEFAULT }),
@@ -141,10 +157,10 @@ function intentForm(m, ctx, hooks) {
   };
   refresh();
   const notes = [usage];
-  if (onFact) notes.unshift(h('p', 'note', 'It builds on this fact.'));
+  if (from) notes.unshift(h('p', 'note', 'It builds on this fact.'));
   const form = writeForm(
     {
-      title: 'Add intent',
+      ...(from ? {} : { title: 'Add intent' }),
       fields,
       notes,
       submit: 'Add intent',
@@ -157,7 +173,7 @@ function intentForm(m, ctx, hooks) {
           text,
           ...(produce ? { produce } : {}),
           ...(giveUp ? { giveUp } : {}),
-          ...(onFact ? { from: m.id } : {}),
+          ...(from ? { from: from.id } : {}),
         };
       },
       // The count moves once the poll that follows the write has drawn the new intent.
@@ -170,8 +186,8 @@ function intentForm(m, ctx, hooks) {
   return form;
 }
 
-/** @param {WriteCtx} ctx @param {Hooks} hooks @param {() => void} added called once the new amendment is drawn */
-function amendmentForm(ctx, hooks, added) {
+/** Add amendment, from the toolbar. @param {WriteCtx} ctx @param {Hooks} hooks */
+export function amendmentForm(ctx, hooks) {
   const text = textField('Amendment', {
     multiline: true,
     max: TEXT_MAX,
@@ -185,8 +201,6 @@ function amendmentForm(ctx, hooks, added) {
       submit: 'Add amendment',
       path: '/amendments',
       body: ([t]) => (t ? { scope: ctx.scope, board: ctx.board, text: t } : EMPTY),
-      // The list moves once the poll that follows the write has drawn the new amendment.
-      after: (polled) => polled.then(() => hooks.live() && added()),
     },
     ctx,
     hooks,
@@ -194,16 +208,21 @@ function amendmentForm(ctx, hooks, added) {
 }
 
 /**
- * The board's amendments from the shown graph, each opening in the drawer; `refresh` redraws it from the graph.
+ * The board's amendments from the shown graph, each opening in the drawer. It redraws after each graph poll that
+ * changes the list, so an amendment added from the toolbar or by a session elsewhere appears here.
  * @param {WriteCtx} ctx
  * @param {Hooks} hooks
- * @returns {{ el: HTMLElement; refresh(): void }}
+ * @returns {HTMLElement}
  */
 function amendmentList(ctx, hooks) {
   const box = h('section', 'drawer-amendments');
+  let drawn = '';
   const refresh = () => {
-    box.replaceChildren(h('h3', 'write-title', 'Amendments'));
     const list = amendmentsOf(ctx.nodes());
+    const key = list.map((n) => `${n.id}\n${n.snippet ?? n.content ?? ''}`).join('\n\n');
+    if (key === drawn && box.childElementCount) return;
+    drawn = key;
+    box.replaceChildren(h('h3', 'write-title', 'Amendments'));
     if (list.length === 0) box.append(h('p', 'note', 'None yet.'));
     for (const n of list) {
       const text = n.snippet ?? n.content ?? '';
@@ -222,11 +241,37 @@ function amendmentList(ctx, hooks) {
     }
   };
   refresh();
-  return { el: box, refresh };
+  hooks.onGraph?.(refresh);
+  return box;
 }
 
 /**
- * The write forms for a memory of the shown board, below its content; none for a memory of another scope or board.
+ * Focus a form's first text box.
+ * @param {HTMLFormElement} form
+ */
+export function focusForm(form) {
+  const box = /** @type {HTMLElement | null} */ (form.querySelector('textarea, input'));
+  box?.focus();
+}
+
+/**
+ * One drawer shortcut: a line that opens to its form, focusing the form's first box.
+ * @param {string} label
+ * @param {HTMLFormElement} form
+ */
+function shortcut(label, form) {
+  const box = /** @type {HTMLDetailsElement} */ (h('details', 'drawer-shortcut'));
+  box.append(h('summary', '', label), form);
+  box.addEventListener('toggle', () => {
+    if (box.open) focusForm(form);
+  });
+  return box;
+}
+
+/**
+ * What the Memory tab adds below a memory of the shown board: on the goal, its amendments (the goal drawer is
+ * otherwise read-only; the board's actions are on the toolbar); on any other node, "Hint about this node", and on a
+ * fact while the board is running or paused, "Try next from this fact". Nothing for a memory of another scope or board.
  * @param {Memory} m
  * @param {WriteCtx} ctx
  * @param {Hooks} hooks
@@ -234,23 +279,13 @@ function amendmentList(ctx, hooks) {
  */
 export function writeSection(m, ctx, hooks) {
   if (m.scope !== ctx.scope || !m.tags.includes(`board:${ctx.board}`)) return [];
+  const kind = kindOf(m.tags);
+  if (kind === 'goal') return [amendmentList(ctx, hooks)];
   const out = [];
   if (ctx.status()?.truncated) out.push(h('p', 'notice', TRUNCATED));
-  const kind = kindOf(m.tags);
-  if (kind === 'goal') {
-    const intent = intentForm(m, ctx, hooks);
-    const amendments = amendmentList(ctx, hooks);
-    const amend = amendmentForm(ctx, hooks, amendments.refresh);
-    /** @param {string | null} state */
-    const show = (state) => {
-      intent.hidden = !offersIntent(m.tags, state);
-      amend.hidden = state === 'done';
-    };
-    show(stateOf(m.tags));
-    out.push(amendments.el, goalControls(m, ctx, hooks, show), intent, amend);
-  } else if (kind === 'fact' && offersIntent(m.tags, ctx.status()?.state ?? null)) {
-    out.push(intentForm(m, ctx, hooks));
+  out.push(shortcut('Hint about this node', hintForm(m, ctx, hooks)));
+  if (kind === 'fact' && offersIntent(m.tags, ctx.status()?.state ?? null)) {
+    out.push(shortcut('Try next from this fact', intentForm(m, ctx, hooks)));
   }
-  out.push(hintForm(m, ctx, hooks));
   return out;
 }

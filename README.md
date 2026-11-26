@@ -219,44 +219,55 @@ see [Development](#development).
 - **Drawer:** click a node for three tabs. **Memory** has the full content, tags, scope and claim. For an intent it
   starts with "Starting point": what it builds on and the latest measurement before it. For a fact it shows the result
   first, and for the goal the progress fields and latest measurement. **Links** lists links in and out, and clicking
-  one selects that node. **Worker log** is described next. On a board, the Memory tab also has the write forms
-  described in "Writing to a board".
+  one selects that node. **Worker log** is described next. On a board, the Memory tab also ends with the node's
+  shortcuts described in "Writing to a board".
 
 ### Writing to a board
 
-On the Board tab, the Memory tab of a node's drawer has forms below its content. A form is disabled while its request
-is in flight. On success it clears, says "Added — it will appear in the graph shortly" and polls the graph at once. On
-failure it shows the server's error. If the board is over 400 nodes, the page warns that what you add may not appear.
+A board's actions are on the Board tab, in a **toolbar** directly under the status strip (on a board, not on a tag's
+graph): the run controls, then **+ Hint**, **+ Intent** and **+ Amendment**. Each of those three opens its form in a
+panel under the toolbar. Only one panel is open at a time, and Escape or the same button closes it. Switching boards
+closes it. A hint or intent added from the toolbar is for the whole board, linked to no node.
 
-- **Add hint**, on every node. It is advice for the lead, read at its next round. On an intent, fact or hint it links
-  to that node. On the goal, conclusion, progress or rules node it links to nothing and applies to the whole board. A
-  hint is allowed in any board state.
-- **Add intent**, on the goal and on facts, while the board is running or paused. Write what a worker should try, and
-  optionally "Done when" and "Give up when". Left empty, they become "a fact reporting what trying this showed" and
-  "it cannot be done within the board's rules; record an inconclusive fact". On a fact, the intent is linked
-  `derived-from` it. The form shows how many intents the board has used out of `Max intents`. A person's intent is
-  accepted even over the limit, and the lead never drops it as pointless: only a fact closes it.
-- **Add amendment**, on the goal, in any state but done. An amendment is a sub-goal or fallback, such as "if 20% is
+The drawer keeps only what is about one node, at the bottom of its Memory tab, each collapsed to one line until you
+click it: **Hint about this node** on any node of the board but the goal, and **Try next from this fact** on a fact
+while the board is running or paused. The goal's drawer is read-only: its progress, the goal text and the list of the
+board's amendments.
+
+A form is disabled while its request is in flight. On success it clears, says "Added — it will appear in the graph
+shortly" and polls the graph at once. On failure it shows the server's error. If the board is over 400 nodes, the page
+warns that what you add may not appear.
+
+- **Hints.** A hint is advice for the lead, read at its next round. From the toolbar it applies to the whole board.
+  From "Hint about this node" on an intent, fact or hint it links to that node; on a conclusion, progress, rules or
+  amendment node it links to nothing and applies to the whole board. A hint is allowed in any board state.
+- **Intents**, while the board is running or paused. Write what a worker should try, and optionally "Done when" and
+  "Give up when". Left empty, they become "a fact reporting what trying this showed" and "it cannot be done within the
+  board's rules; record an inconclusive fact". From "Try next from this fact", the intent is linked `derived-from`
+  that fact. The form shows how many intents the board has used out of `Max intents`. A person's intent is accepted
+  even over the limit, and the lead never drops it as pointless: only a fact closes it.
+- **+ Amendment**, in any state but done. An amendment is a sub-goal or fallback, such as "if 20% is
   out of reach, 15% is acceptable, as long as X is unchanged". The goal stays as written, and the lead reads every
   amendment with it, the newer winning a conflict. A fallback applies only once the goal's own target is out of reach.
   Without `[measure]`, meeting it concludes the board as done, citing the amendment. With `[measure]`, the runner's
-  measurement stays the arbiter, so the lead stops with `Stopped: amended target met (amendment <id>)`. The drawer
-  lists the board's amendments.
-- **Controls**, on the goal. Each changes the goal memory in the database, so it works for a board run on any
-  machine. Only the buttons valid for the goal's state are shown.
+  measurement stays the arbiter, so the lead stops with `Stopped: amended target met (amendment <id>)`. The goal's
+  drawer lists the board's amendments.
+- **Run controls**, at the start of the toolbar. Each changes the goal memory in the database, so it works for a board
+  run on any machine. Only the buttons valid for the goal's state are shown.
   - **Pause lead** (while running) swaps `state:running` for `state:paused`. The lead plans nothing new and writes
     nothing, but keeps its claim and ends each round with `BOARD-LEAD paused`. Workers finish what they hold and take
     intents that are already open, including ones you add. The runner keeps going and asks the lead for a round every
     2 minutes, so **Resume lead** is seen within about that time.
-  - **Stop** (while running or paused) sets `state:stopped`, after a confirmation in the page that focuses Cancel.
-    Workers end at their next step, and the runner lets running workers finish, then exits.
+  - **Stop…** (while running or paused) sets `state:stopped`, after a confirmation under the toolbar that focuses
+    Cancel. Workers end at their next step, and the runner lets running workers finish, then exits.
   - **Restart** (when stopped) sets `state:running` again and says to run `board-runner run <board file>` again to
     start the workers. It is not offered when the goal is done.
-  - **Intent limit** shows the goal's `Max intents` and saves a whole number, or `none`. Saving rewrites that line and
-    keeps the rest of the goal. Once the count of intents reaches a lowered limit, the lead plans no more, and it stops
-    the board once no intent is open. Raising it on a board that stopped at its limit sets it running again, as `/blackboard resume` does, with
-    the same note to run the runner again. A higher `max_intents` in the board file raises it again on the next
-    `board-runner run`.
+  - **Intent limit** is in the status strip: in "Intents 14 of 20" the limit is a button. Click it to edit the goal's
+    `Max intents` in place, type a whole number or `none`, and press Enter to save; Escape, or clicking away, cancels.
+    A done board shows it as plain text. Saving rewrites that line and keeps the rest of the goal. Once the count of
+    intents reaches a lowered limit, the lead plans no more, and it stops the board once no intent is open. Raising it
+    on a board that stopped at its limit sets it running again, as `/blackboard resume` does, with the same note to
+    run the runner again. A higher `max_intents` in the board file raises it again on the next `board-runner run`.
 
 The browser sends only text and the node it is about. The server builds every word of the template, every tag and every
 link, and folds line breaks in your text to spaces so no field can forge another line. The same writes are available in

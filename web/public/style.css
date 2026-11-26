@@ -279,6 +279,60 @@ main {
   color: var(--ok);
 }
 
+/* the board toolbar, under the strip, and the strip's intent limit editor */
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+}
+
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-group .note {
+  margin: 0;
+}
+
+.toolbar-row .write-status {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+
+.toolbar-panel {
+  max-width: 44em;
+}
+
+.toolbar-panel .notice {
+  margin-top: 6px;
+}
+
+.toolbar-panel .write-box,
+.toolbar-panel .controls-confirm {
+  margin: 6px 0 0;
+}
+
+.limit {
+  white-space: nowrap;
+}
+
+.limit-button {
+  padding: 0 4px;
+  border-style: dashed;
+  background: transparent;
+  font-size: inherit;
+}
+
+.limit-input {
+  width: 6em;
+  padding: 0 4px;
+}
+
 .notices:empty {
   display: none;
 }
@@ -576,10 +630,6 @@ main {
   border-radius: 4px;
 }
 
-.write-box.controls {
-  border-left: 3px solid var(--accent);
-}
-
 .write-title {
   margin: 0 0 6px;
   font-size: 13px;
@@ -637,13 +687,8 @@ main {
   color: var(--muted);
 }
 
-.write-status code,
-.controls-limit code {
+.write-status code {
   font: 12px ui-monospace, Menlo, monospace;
-}
-
-.controls-state {
-  margin: 0 0 6px;
 }
 
 .controls-confirm {
@@ -656,8 +701,28 @@ main {
   margin: 0 0 6px;
 }
 
-.controls-limit {
-  margin-top: 8px;
+.drawer-shortcut {
+  margin: 10px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.drawer-shortcut > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.drawer-shortcut[open] > summary {
+  color: var(--text);
+}
+
+.drawer-shortcut > .write-box {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 4px 4px;
 }
 
 button.danger {

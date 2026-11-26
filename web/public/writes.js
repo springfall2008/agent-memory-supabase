@@ -1,5 +1,6 @@
 // @ts-check
-// The rules of the drawer's write forms and board controls: which are offered when, and their fixed wording. No DOM.
+// The rules of the board toolbar, the drawer's shortcuts and the board controls: which are offered when, and their
+// fixed wording. No DOM.
 import { kindOf } from './names.js';
 
 /** @typedef {'pause' | 'resume' | 'stop' | 'restart'} Action */
@@ -17,6 +18,10 @@ export const GIVE_UP_DEFAULT = "it cannot be done within the board's rules; reco
 /** The server's limits on a form's text, in characters after trimming. */
 export const TEXT_MAX = 2000;
 export const FIELD_MAX = 500;
+
+/** The intent limit editor's tooltip. */
+export const LIMIT_NOTE =
+  'A whole number, or none. A higher max_intents in the board file raises it again on the next board-runner run.';
 
 /** Kinds a hint is linked to; a hint on any other node is board-wide. */
 const HINT_LINKS = ['intent', 'fact', 'hint'];
@@ -58,6 +63,30 @@ export function controlActions(state) {
   if (state === 'paused') return ['resume', 'stop'];
   if (state === 'stopped') return ['restart'];
   return [];
+}
+
+/**
+ * What the Board tab's toolbar offers in a goal state: the controls valid in it, + Hint always, + Intent while running
+ * or paused, + Amendment and the intent limit editor in any state but done.
+ * @param {string | null} state
+ * @returns {{ controls: Action[]; hint: boolean; intent: boolean; amendment: boolean; limit: boolean }}
+ */
+export function toolbarOffers(state) {
+  return {
+    controls: controlActions(state),
+    hint: true,
+    intent: state === 'running' || state === 'paused',
+    amendment: state !== 'done',
+    limit: state !== 'done',
+  };
+}
+
+/**
+ * The strip's text for the goal's `Max intents`, which the limit editor opens on.
+ * @param {number | 'none' | null} max
+ */
+export function maxText(max) {
+  return max === 'none' ? 'no limit' : max === null ? 'unknown' : String(max);
 }
 
 /**
