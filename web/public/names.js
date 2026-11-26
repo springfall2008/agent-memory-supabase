@@ -2,14 +2,15 @@
 // Pure helpers for naming and classifying board memories. No DOM.
 
 /**
- * @typedef {'goal' | 'rules' | 'progress' | 'intent' | 'fact' | 'hint' | 'conclusion' | 'other'} Kind
+ * @typedef {'goal' | 'rules' | 'progress' | 'amendment' | 'intent' | 'fact' | 'hint' | 'conclusion' | 'other'} Kind
  * @typedef {'confirmed' | 'refuted' | 'inconclusive'} Verdict
  * @typedef {{ label: string | null }} ClaimSession
  * @typedef {{ description: string; session?: ClaimSession }} NamedClaim
  * @typedef {{ content?: string; snippet?: string; claim?: NamedClaim }} Labelled
  */
 
-const PREFIX = /^(?:Intent:|Fact for intent \S+:|Partial result for intent \S+:|Hint:|Conclusion for board \S+:)/;
+const PREFIX =
+  /^(?:Intent:|Fact for intent \S+:|Partial result for intent \S+:|Hint:|Amendment:|Conclusion for board \S+:)/;
 const EMPTY = '(empty)';
 
 /**
@@ -40,7 +41,7 @@ function tagValue(tags, prefix) {
   return null;
 }
 
-const KINDS = ['goal', 'rules', 'progress', 'intent', 'fact', 'hint', 'conclusion'];
+const KINDS = ['goal', 'rules', 'progress', 'amendment', 'intent', 'fact', 'hint', 'conclusion'];
 
 /**
  * @param {string[]} tags

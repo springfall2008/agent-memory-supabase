@@ -31,7 +31,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: var(--text);
   background: var(--panel);
@@ -264,6 +265,18 @@ main {
 
 .conn-signed-out::before {
   color: var(--bad);
+}
+
+.state-paused {
+  color: var(--warn);
+}
+
+.state-stopped {
+  color: var(--bad);
+}
+
+.state-done {
+  color: var(--ok);
 }
 
 .notices:empty {
@@ -550,6 +563,106 @@ main {
 
 .link-name {
   overflow-wrap: anywhere;
+}
+
+/* ── write forms and controls ──────────────────────────────────── */
+
+.write-box,
+.drawer-amendments {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.write-box.controls {
+  border-left: 3px solid var(--accent);
+}
+
+.write-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.write-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.write-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.write-field textarea {
+  resize: vertical;
+  min-height: 3.5em;
+}
+
+.write-box .note {
+  margin: 2px 0 6px;
+}
+
+.write-actions,
+.controls-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.controls-buttons .note {
+  margin: 0;
+}
+
+.write-status {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.write-status.ok {
+  color: var(--ok);
+}
+
+.write-status.error {
+  color: var(--bad);
+}
+
+.write-status.busy {
+  color: var(--muted);
+}
+
+.write-status code,
+.controls-limit code {
+  font: 12px ui-monospace, Menlo, monospace;
+}
+
+.controls-state {
+  margin: 0 0 6px;
+}
+
+.controls-confirm {
+  padding: 6px 8px;
+  border-left: 3px solid var(--bad);
+  background: var(--panel);
+}
+
+.controls-confirm p {
+  margin: 0 0 6px;
+}
+
+.controls-limit {
+  margin-top: 8px;
+}
+
+button.danger {
+  border-color: var(--bad);
+  color: var(--bad);
 }
 
 /* ── worker log ────────────────────────────────────────────────── */

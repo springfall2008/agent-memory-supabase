@@ -11,6 +11,7 @@ const COLOUR = {
   inconclusive: '#9ca3af',
   fact: '#64748b',
   hint: '#f59e0b',
+  amendment: '#5eead4',
   conclusion: '#14b8a6',
   rules: '#4b5563',
   progress: '#4b5563',
@@ -37,11 +38,13 @@ const STYLE = [
       'z-index': 10,
     },
   },
-  ...['goal', 'intent', 'fact', 'hint', 'conclusion'].map((k) => ({
+  ...['goal', 'intent', 'fact', 'hint', 'amendment', 'conclusion'].map((k) => ({
     selector: `node.kind-${k}`,
     style: { 'background-color': COLOUR[k] },
   })),
   { selector: 'node.kind-goal', style: { width: 32, height: 32, 'font-size': 12, 'font-weight': 'bold' } },
+  // An amendment changes what counts as done, so it reads apart from hints and the conclusion by shape as well.
+  { selector: 'node.kind-amendment', style: { shape: 'diamond', width: 26, height: 26 } },
   ...['confirmed', 'refuted', 'inconclusive'].map((v) => ({
     selector: `node.verdict-${v}`,
     style: { 'background-color': COLOUR[v] },

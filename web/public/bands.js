@@ -16,6 +16,8 @@ const BAND_TOP = 45;
 const BAND_BOTTOM = 50;
 /** A side lane wraps into a new column after this many rows, or after the band's deepest result stack if deeper. */
 const LANE_MIN_ROWS = 3;
+/** The kinds in the header band: the goal, with its rules, progress and amendments beside it. */
+const HEADER = ['goal', 'rules', 'progress', 'amendment'];
 /** Untagged intents further apart in time than this start a new band. */
 export const GAP_MS = 2 * 60 * 1000;
 
@@ -109,7 +111,8 @@ const isPartialResult = (n) => (n.snippet ?? n.content ?? '').trimStart().starts
 
 /**
  * Positions for every node, and the bands to draw behind them.
- * 1. Header: the goal at (0, top row), rules and progress (and any other goal) beside it, right then left.
+ * 1. Header: the goal at (0, top row), rules, progress, amendments (and any other goal) beside it, oldest first,
+ *    right then left.
  * 2. One band per round (`roundGroups`): its intents on one row, centred on x = 0, ordered by the mean x of the
  *    already-placed nodes each cites (`derived-from` / `relates-to`), then the ones citing nothing placed, by time.
  * 3. Under each intent, in creation order: facts `derived-from` it and `Partial result for intent` hints
@@ -146,7 +149,7 @@ export function bandLayout(graph) {
 
   // 1. Header.
   const goal = nodes.find((n) => kind(n.id) === 'goal');
-  const beside = nodes.filter((n) => n !== goal && ['goal', 'rules', 'progress'].includes(kind(n.id)));
+  const beside = nodes.filter((n) => n !== goal && HEADER.includes(kind(n.id)));
   if (goal || beside.length) {
     if (goal) positions[goal.id] = { x: 0, y: BAND_TOP };
     beside.forEach((n, k) => {
@@ -172,7 +175,7 @@ export function bandLayout(graph) {
 
   // 4. Everything else, to the band whose time it falls in.
   const groups = roundGroups(nodes.filter((n) => kind(n.id) === 'intent'));
-  const placedElsewhere = new Set(['goal', 'rules', 'progress', 'intent', 'conclusion']);
+  const placedElsewhere = new Set([...HEADER, 'intent', 'conclusion']);
   const rest = nodes.filter((n) => !placedElsewhere.has(kind(n.id)) && !isResult.has(n.id));
   /** @type {LayoutNode[][]} */
   const lanes = groups.map(() => []);
