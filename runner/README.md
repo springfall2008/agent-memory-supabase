@@ -32,6 +32,9 @@ runner/board-runner status boards/my-board.toml
 - **Watch the lead:** `tmux attach -t board-<board>`, and detach with Ctrl-b d. You can talk to the lead between rounds.
   The runner only sends a command after your input box has been empty for 30 seconds.
 - **Pause commands to the lead:** `touch ~/.board-runner/<board>/hold`. Delete the file to resume.
+- **A paused board:** when the lead ends a round with `BOARD-LEAD paused`, the runner keeps running, keeps filling
+  worker slots from `free`, and asks the lead for a round every 2 minutes instead of every `round_every_minutes`, so a
+  resume is seen quickly.
 - **Ctrl-C once:** start no more workers, let the running ones finish, then exit. The board stays running, so a later
   `run` carries on with it. **Ctrl-C twice:** kill the workers now; their claims lapse after `claim_minutes`.
 - **The lead needs you:** if a lead turn ends without a `BOARD-LEAD` line, for example because the lead asked you

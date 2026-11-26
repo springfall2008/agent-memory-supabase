@@ -26,6 +26,10 @@ def running(free, open_=None):
     return LeadTurn(LeadResult("running", free=free, open=free if open_ is None else open_))
 
 
+def paused(free, open_=None):
+    return LeadTurn(LeadResult("paused", free=free, open=free if open_ is None else open_))
+
+
 def fact():
     return WorkResult("fact", "confirmed", "i1")
 
@@ -117,6 +121,44 @@ class SchedulerTest(unittest.TestCase):
         s.on_event(running(0), 0)
         self.assertIsNone(s.poll_send(1199))
         self.assertEqual(s.poll_send(1200), ROUND)
+
+    def test_paused_fills_slots_from_free(self):
+        s = self.make()
+        self.assertEqual(s.on_event(paused(5), 1), [StartWorker(0), StartWorker(1)])
+
+    def test_paused_does_not_drain(self):
+        s = self.make()
+        s.on_event(paused(0), 1)
+        self.assertFalse(s.draining)
+        self.assertEqual(s.on_event(Tick(), 2), [])
+
+    def test_paused_heartbeat_is_two_minutes(self):
+        s = self.make()
+        s.on_event(paused(0), 0)
+        self.assertIsNone(s.poll_send(119))
+        self.assertEqual(s.poll_send(120), ROUND)
+
+    def test_running_heartbeat_stays_round_every_minutes(self):
+        s = self.make()
+        s.on_event(running(0), 0)
+        self.assertIsNone(s.poll_send(120))
+        self.assertEqual(s.poll_send(1200), ROUND)
+
+    def test_resume_restores_the_heartbeat(self):
+        s = self.make()
+        s.on_event(paused(0), 0)
+        self.send(s, 120)
+        s.on_event(running(0), 130)
+        self.assertIsNone(s.poll_send(130 + 120))
+        self.assertEqual(s.poll_send(120 + 1200), ROUND)
+
+    def test_paused_lead_pending_warning_uses_the_paused_interval(self):
+        s = self.make()
+        s.on_event(paused(0), 0)
+        self.send(s, 120)
+        self.assertEqual(warns(s.on_event(Tick(), 120 + 239)), [])
+        actions = s.on_event(Tick(), 120 + 240)
+        self.assertTrue(any("no turn end for 4 minutes" in w.message for w in warns(actions)))
 
     def test_pending_blocks_sends(self):
         s = self.make()

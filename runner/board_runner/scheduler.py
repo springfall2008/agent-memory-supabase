@@ -16,6 +16,7 @@ from .protocol import LeadResult, WorkResult
 BACKOFF_SECONDS = 60
 LEAD_BUSY_WARN_SECONDS = 15 * 60
 MAX_FAILED_MEASUREMENTS = 5
+PAUSED_HEARTBEAT_SECONDS = 120
 
 
 # --- events --------------------------------------------------------------
@@ -116,6 +117,7 @@ class Scheduler:
         self.wanted = False
         self.free_hint = 0
         self.draining = False
+        self.lead_paused = False
         self.interrupts = 0
         self.shutdown_sent = False
         self.measure = _Measurement()
@@ -156,7 +158,7 @@ class Scheduler:
         if self.lead_pending or self.needs_person or self.draining or self.shutdown_sent:
             return None
         measured = self.measure.results[0] if self.measure.results else None
-        heartbeat_due = now - self.last_sent >= self.bf.round_every_minutes * 60
+        heartbeat_due = now - self.last_sent >= self._heartbeat_seconds()
         if measured is None and not self.wanted and not heartbeat_due:
             return None
         prompt = lead_prompt(self.bf.board, self.lead_label, measure=self.bf.measure is not None, measured=measured)
@@ -191,8 +193,9 @@ class Scheduler:
                 )
             ]
         self.needs_person = False
+        self.lead_paused = result.kind == "paused"
         actions: list = []
-        if result.kind in ("running", "candidate"):
+        if result.kind in ("running", "paused", "candidate"):
             self.free_hint = result.free or 0
             if result.kind == "candidate":
                 actions += self._enqueue_candidate(result.ref or "")
@@ -262,13 +265,14 @@ class Scheduler:
                 if now - state.started_at >= state.worker.timeout_minutes * 60:
                     state.killing = True
                     actions += [KillWorker(index), Release(state.label or "", state.worker.timeout_minutes)]
-        if self.lead_pending and now - self.last_sent >= 2 * self.bf.round_every_minutes * 60:
+        heartbeat = self._heartbeat_seconds()
+        if self.lead_pending and now - self.last_sent >= 2 * heartbeat:
             # No Stop event for two heartbeats: the lead was interrupted, is stuck at a prompt, or died mid-turn.
             self.lead_pending = False
             self.needs_person = True
             actions.append(
                 Warn(
-                    f"The lead has had no turn end for {2 * self.bf.round_every_minutes} minutes; it may need you. "
+                    f"The lead has had no turn end for {round(2 * heartbeat / 60)} minutes; it may need you. "
                     f"Look with: tmux attach -t board-{self.bf.board}"
                 )
             )
@@ -290,6 +294,10 @@ class Scheduler:
         return [KillWorker(i) for i, s in enumerate(self.slots) if s.busy] + [Shutdown(True)]
 
     # --- helpers --------------------------------------------------------
+
+    def _heartbeat_seconds(self) -> int:
+        """How often the lead is asked for a round: every 2 minutes while the board is paused, so a resume is seen."""
+        return PAUSED_HEARTBEAT_SECONDS if self.lead_paused else self.bf.round_every_minutes * 60
 
     def _exclusive_hold(self) -> bool:
         m = self.measure

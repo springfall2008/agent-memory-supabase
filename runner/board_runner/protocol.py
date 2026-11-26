@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 WorkKind = Literal["fact", "none", "partial", "stopped", "lost"]
-LeadKind = Literal["running", "candidate", "done", "stopped", "outgrown", "refused", "none"]
+LeadKind = Literal["running", "paused", "candidate", "done", "stopped", "outgrown", "refused", "none"]
 StartKind = Literal["created", "exists", "resumed", "not-running", "lost"]
 
 
@@ -47,6 +47,7 @@ _WORK = {
     "stopped": re.compile(r"^BOARD-WORK stopped$"),
 }
 _LEAD_RUNNING = re.compile(r"^BOARD-LEAD running free=(\d+) open=(\d+)$")
+_LEAD_PAUSED = re.compile(r"^BOARD-LEAD paused free=(\d+) open=(\d+)$")
 _LEAD_CANDIDATE = re.compile(r"^BOARD-LEAD candidate (\S+) free=(\d+) open=(\d+)$")
 _LEAD_PLAIN = re.compile(r"^BOARD-LEAD (done|stopped|outgrown)$")
 _LEAD_REFUSED = re.compile(r"^BOARD-LEAD refused (\S+) (\S+)$")
@@ -85,6 +86,8 @@ def parse_lead(text: str | None) -> LeadResult:
         return LeadResult("none")
     if m := _LEAD_RUNNING.match(line):
         return LeadResult("running", free=int(m.group(1)), open=int(m.group(2)))
+    if m := _LEAD_PAUSED.match(line):
+        return LeadResult("paused", free=int(m.group(1)), open=int(m.group(2)))
     if m := _LEAD_CANDIDATE.match(line):
         return LeadResult("candidate", free=int(m.group(2)), open=int(m.group(3)), ref=m.group(1))
     if m := _LEAD_PLAIN.match(line):
