@@ -5,6 +5,7 @@ import { parseTranscript } from '../../web/public/transcript.js';
 import { nextDelay, POLL_MS } from '../../web/public/poll.js';
 import { parseStatus } from '../../web/public/status.js';
 import { applyChunk, emptyLog } from '../../web/public/logbuf.js';
+import { boardHash, parseHash, tagHash } from '../../web/public/route.js';
 
 // ── names ──────────────────────────────────────────────────────────
 
@@ -237,4 +238,27 @@ Deno.test('applyChunk adopts the first forward chunk wherever the server starts 
     next: 103,
     text: 'abc',
   });
+});
+
+// ── route ──────────────────────────────────────────────────────────
+
+Deno.test('parseHash reads browse, board and tag routes', () => {
+  assertEquals(parseHash(''), { tab: 'browse' });
+  assertEquals(parseHash('#browse'), { tab: 'browse' });
+  assertEquals(parseHash('#board'), { tab: 'board' });
+  assertEquals(parseHash('#board/agent-memory-tool/toy'), { tab: 'board', scope: 'agent-memory-tool', board: 'toy' });
+  assertEquals(parseHash('#tag/repo%3Ax'), { tab: 'board', tag: 'repo:x' });
+});
+
+Deno.test('parseHash falls back to browse for malformed routes', () => {
+  assertEquals(parseHash('#board/only-scope'), { tab: 'browse' });
+  assertEquals(parseHash('#board//x'), { tab: 'browse' });
+  assertEquals(parseHash('#tag/'), { tab: 'browse' });
+  assertEquals(parseHash('#tag/%E0%A4%A'), { tab: 'browse' });
+  assertEquals(parseHash('#nonsense'), { tab: 'browse' });
+});
+
+Deno.test('boardHash and tagHash round-trip through parseHash, slashes included', () => {
+  assertEquals(parseHash(boardHash('a/b', 'x y')), { tab: 'board', scope: 'a/b', board: 'x y' });
+  assertEquals(parseHash(tagHash('board:a/b#c')), { tab: 'board', tag: 'board:a/b#c' });
 });
