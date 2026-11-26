@@ -250,7 +250,8 @@ export function createGraphView(container, opts) {
       nodes.forEach((/** @type {any} */ n) => {
         if (!n.removed()) n.position(at(n));
       });
-      if (refit) fit();
+      // Not if the person panned or zoomed while the nodes slid.
+      if (refit && !userMoved()) fit();
     };
     if (!animate || document.visibilityState !== 'visible') {
       nodes.layout({ name: 'preset', positions: at, fit: false, animate: false }).run();

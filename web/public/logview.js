@@ -1,5 +1,5 @@
 // The drawer's Worker log tab: one worker transcript from the local server, rendered as steps and followed live.
-import { NOT_SIGNED_IN } from './api.js';
+import { NOT_SIGNED_IN, REQUEST_TIMEOUT_MS } from './api.js';
 import { h } from './dom.js';
 import { applyChunk, emptyLog } from './logbuf.js';
 import { nextDelay, POLL_MS } from './poll.js';
@@ -25,25 +25,39 @@ class LogError extends Error {
 }
 
 /**
+ * A request with no answer after `REQUEST_TIMEOUT_MS`, or aborted through `signal`, fails with status 0, as a network
+ * error does, so it is retried.
  * @param {string} board
  * @param {string} label
  * @param {string} query
+ * @param {AbortSignal} signal aborted when the view is destroyed
  * @returns {Promise<LogChunk>}
  */
-async function fetchLog(board, label, query) {
+async function fetchLog(board, label, query, signal) {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const both = AbortSignal.any([signal, timeout]);
+  const failed = () =>
+    new LogError(
+      0,
+      timeout.aborted && !signal.aborted
+        ? 'Timed out: the local server did not answer'
+        : 'Network error: the local server is not reachable',
+    );
   let res;
   try {
     res = await fetch(`/logs/${encodeURIComponent(board)}/${encodeURIComponent(label)}?${query}`, {
       headers: { accept: 'application/json' },
+      signal: both,
     });
   } catch {
-    throw new LogError(0, 'Network error: the local server is not reachable');
+    throw failed();
   }
   let body = null;
   try {
     body = await res.json();
   } catch {
-    // not JSON
+    // An abort while reading the body is a failed request; otherwise the body is not JSON.
+    if (both.aborted) throw failed();
   }
   if (!res.ok) {
     throw new LogError(res.status, body && typeof body.error === 'string' ? body.error : `HTTP ${res.status}`);
@@ -163,6 +177,8 @@ export function createLogView(opts) {
   let dead = false;
   let timer = 0;
   let delay = POLL_MS;
+  /** Aborts any request in flight when the view is destroyed. */
+  const ctrl = new AbortController();
 
   const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= FOLLOW_PX;
   const live = () => active && !dead && document.visibilityState === 'visible';
@@ -217,7 +233,7 @@ export function createLogView(opts) {
     earlier.setAttribute('disabled', '');
     let ok = true;
     try {
-      const c = await fetchLog(opts.board, opts.label, loaded ? `from=${buf.next}` : 'tail=1');
+      const c = await fetchLog(opts.board, opts.label, loaded ? `from=${buf.next}` : 'tail=1', ctrl.signal);
       if (dead) return;
       onForward(c);
     } catch (e) {
@@ -242,7 +258,7 @@ export function createLogView(opts) {
     busy = true;
     earlier.setAttribute('disabled', '');
     try {
-      const c = await fetchLog(opts.board, opts.label, `before=${buf.start}`);
+      const c = await fetchLog(opts.board, opts.label, `before=${buf.start}`, ctrl.signal);
       if (dead) return;
       const next = applyChunk(buf, c, 'earlier');
       if (next !== buf) {
@@ -276,6 +292,7 @@ export function createLogView(opts) {
     },
     destroy() {
       dead = true;
+      ctrl.abort();
       clearTimeout(timer);
       timer = 0;
       document.removeEventListener('visibilitychange', resume);

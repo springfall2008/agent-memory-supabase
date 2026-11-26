@@ -4,7 +4,7 @@ import { diffGraph } from './diff.js';
 import { clock, h, option } from './dom.js';
 import { createGraphView } from './graphview.js';
 import { kindOf, shortName, stateOf } from './names.js';
-import { nextDelay, POLL_MS } from './poll.js';
+import { connState, nextDelay, POLL_MS, STALE_MS } from './poll.js';
 import { boardHash } from './route.js';
 import { parseStatus } from './status.js';
 
@@ -13,6 +13,7 @@ import { parseStatus } from './status.js';
  * @typedef {{ scope: string; board: string; state: string | null; goalId: string }} BoardInfo
  * @typedef {{
  *   target: Target;
+ *   ctrl: AbortController;
  *   cancelled: boolean;
  *   busy: boolean;
  *   paused: boolean;
@@ -45,8 +46,9 @@ export function mountBoard(el, opts) {
   bar.append(picker, reload, more);
 
   const strip = h('div', 'status-strip');
-  strip.setAttribute('aria-live', 'polite');
   const notices = h('div', 'notices');
+  // Only the notices are announced: the strip changes its refresh time on every poll.
+  notices.setAttribute('aria-live', 'polite');
   const graphEl = h('div', 'graph');
   el.replaceChildren(bar, strip, notices, graphEl);
 
@@ -140,7 +142,7 @@ export function mountBoard(el, opts) {
       parts.push(item(`Tag ${t.tag}`, 'name'), item(`${nodes.length} memories`));
     }
     if (me.refreshed) parts.push(item(`refreshed ${clock(me.refreshed)}`));
-    parts.push(connItem(me.conn));
+    parts.push(connItem(connState(me.conn, me.refreshed, Date.now())));
     strip.replaceChildren(...parts);
 
     const msgs = viewError ? [viewError] : [];
@@ -155,18 +157,28 @@ export function mountBoard(el, opts) {
     notices.replaceChildren(...msgs.map((m) => h('p', 'notice', m)));
   }
 
-  /** @param {'loading' | 'live' | 'retrying' | 'signed-out'} conn */
+  /** @param {'loading' | 'live' | 'stale' | 'retrying' | 'signed-out'} conn */
   function connItem(conn) {
-    const text = { loading: 'loading', live: 'live', retrying: 'retrying', 'signed-out': 'not signed in' }[conn];
+    const text = {
+      loading: 'loading',
+      live: 'live',
+      stale: 'stale',
+      retrying: 'retrying',
+      'signed-out': 'not signed in',
+    }[conn];
     return item(text, `conn conn-${conn}`);
+  }
+
+  /** Stop a loop for good: no further polls, and any request in flight is aborted. @param {Loop} me */
+  function cancel(me) {
+    me.cancelled = true;
+    clearTimeout(me.timer);
+    me.ctrl.abort();
   }
 
   function signOut() {
     signedOut = true;
-    if (loop) {
-      loop.cancelled = true;
-      clearTimeout(loop.timer);
-    }
+    if (loop) cancel(loop);
     strip.replaceChildren(...[...strip.children].filter((c) => !c.classList.contains('conn')), connItem('signed-out'));
     notices.replaceChildren(h('p', 'notice error', NOT_SIGNED_IN));
   }
@@ -178,7 +190,7 @@ export function mountBoard(el, opts) {
     const t = me.target;
     const q = new URLSearchParams({ tags_all: t.kind === 'board' ? `board:${t.board}` : t.tag });
     if (t.kind === 'board') q.set('scope', t.scope);
-    const graph = /** @type {any} */ (await getJson(`/graph?${q}`));
+    const graph = /** @type {any} */ (await getJson(`/graph?${q}`, me.ctrl.signal));
     if (me.cancelled) return;
     const diff = diffGraph(me.prev, graph);
     if (t.kind === 'board') {
@@ -187,12 +199,12 @@ export function mountBoard(el, opts) {
       const progress = graph.nodes.findLast((/** @type {any} */ n) => kindOf(n.tags) === 'progress');
       // Full content, fetched on first load and whenever the graph says the memory changed.
       if ((goal?.id ?? null) !== me.goalId || (goal && touched.has(goal.id))) {
-        me.goalText = goal ? await contentOf(goal.id) : '';
+        me.goalText = goal ? await contentOf(goal.id, me.ctrl.signal) : '';
         if (me.cancelled) return;
         me.goalId = goal?.id ?? null;
       }
       if ((progress?.id ?? null) !== me.progressId || (progress && touched.has(progress.id))) {
-        me.progressText = progress ? await contentOf(progress.id) : '';
+        me.progressText = progress ? await contentOf(progress.id, me.ctrl.signal) : '';
         if (me.cancelled) return;
         me.progressId = progress?.id ?? null;
       }
@@ -204,9 +216,11 @@ export function mountBoard(el, opts) {
     me.refreshed = new Date();
   }
 
-  /** @param {string} id */
-  async function contentOf(id) {
-    const res = /** @type {{ memory: { content: string } }} */ (await getJson(`/memories/${encodeURIComponent(id)}`));
+  /** @param {string} id @param {AbortSignal} signal */
+  async function contentOf(id, signal) {
+    const res = /** @type {{ memory: { content: string } }} */ (
+      await getJson(`/memories/${encodeURIComponent(id)}`, signal)
+    );
     return res.memory.content;
   }
 
@@ -220,6 +234,10 @@ export function mountBoard(el, opts) {
     }
     me.busy = true;
     let ok = true;
+    // A request that hangs leaves the strip saying live: redraw it once the last refresh is old enough to say stale.
+    const stale = setTimeout(() => {
+      if (!me.cancelled) renderStrip(me);
+    }, STALE_MS + 100);
     try {
       await pollOnce(me);
     } catch (e) {
@@ -231,6 +249,7 @@ export function mountBoard(el, opts) {
       ok = false;
       me.error = errorText(e);
     } finally {
+      clearTimeout(stale);
       me.busy = false;
     }
     if (me.cancelled) return;
@@ -255,14 +274,12 @@ export function mountBoard(el, opts) {
 
   /** @param {Target} target */
   function start(target) {
-    if (loop) {
-      loop.cancelled = true;
-      clearTimeout(loop.timer);
-    }
+    if (loop) cancel(loop);
     view?.clear();
     /** @type {Loop} */
     const me = {
       target,
+      ctrl: new AbortController(),
       cancelled: false,
       busy: false,
       paused: false,

@@ -1,6 +1,7 @@
 import { assert, assertEquals } from '@std/assert';
 import { kindOf, shortName, stateOf, verdictOf, workerLabel } from '../../web/public/names.js';
 import {
+  builtBefore,
   citations,
   foundLine,
   isMeasurement,
@@ -10,7 +11,7 @@ import {
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
 import { parseTranscript } from '../../web/public/transcript.js';
-import { nextDelay, POLL_MS } from '../../web/public/poll.js';
+import { connState, nextDelay, POLL_MS, STALE_MS } from '../../web/public/poll.js';
 import { parseStatus } from '../../web/public/status.js';
 import { applyChunk, emptyLog } from '../../web/public/logbuf.js';
 import { boardHash, parseHash, tagHash } from '../../web/public/route.js';
@@ -214,6 +215,17 @@ Deno.test('nextDelay backs off on failure and resets on success', () => {
   assertEquals(nextDelay(1000, false), 3000);
 });
 
+Deno.test('connState says stale once a live loop has not refreshed for three polls', () => {
+  assertEquals(STALE_MS, 3 * POLL_MS);
+  const at = new Date('2026-01-01T10:00:00Z');
+  const later = (ms: number) => at.getTime() + ms;
+  assertEquals(connState('live', at, later(STALE_MS)), 'live');
+  assertEquals(connState('live', at, later(STALE_MS + 1)), 'stale');
+  assertEquals(connState('live', null, later(STALE_MS + 1)), 'live');
+  assertEquals(connState('retrying', at, later(STALE_MS + 1)), 'retrying');
+  assertEquals(connState('loading', at, later(STALE_MS + 1)), 'loading');
+});
+
 // ── status ─────────────────────────────────────────────────────────
 
 Deno.test('parseStatus reads round, max intents and best result', () => {
@@ -297,8 +309,8 @@ const board = (nodes: LayoutNode[], edges: Edge[] = []) => ({ nodes, edges });
 const header = () => [mem('goal', 'goal', 0), mem('rules', 'rules', 0.1), mem('progress', 'progress', 0.2)];
 const headerLinks = () => [link('rules', 'goal', 'depends-on'), link('progress', 'goal', 'depends-on')];
 
-/** The predbat-memory shape, untagged, as the old brief gives it. */
-function predbatShape() {
+/** A sample board with untagged rounds, as the old brief gives it. */
+function sampleBoard() {
   const nodes = [
     ...header(),
     mem('A', 'intent', 1),
@@ -436,7 +448,7 @@ Deno.test('bandLayout puts the conclusion in its own band at the bottom, centred
 });
 
 Deno.test('bandLayout: adding nodes to the newest band leaves earlier bands where they were', () => {
-  const before = predbatShape();
+  const before = sampleBoard();
   const after = board(
     [...before.nodes, mem('E', 'intent', 20.5), mem('FD2', 'fact', 26), mem('lead', 'fact', 27)],
     [...before.edges, link('E', 'FB2'), link('FD2', 'D')],
@@ -449,8 +461,8 @@ Deno.test('bandLayout: adding nodes to the newest band leaves earlier bands wher
   assertEquals(bandLayout(after), bandLayout(after));
 });
 
-Deno.test('bandLayout lays out the predbat-memory shape in time bands with no two nodes overlapping', () => {
-  const g = predbatShape();
+Deno.test('bandLayout lays out a sample board in time bands with no two nodes overlapping', () => {
+  const g = sampleBoard();
   const { positions: p, bands } = bandLayout(g);
   assertEquals(bands.map((b) => b.label), ['Goal', 'Batch 1', 'Batch 2', 'Batch 3']);
   assertEquals(Object.keys(p).sort(), g.nodes.map((n) => n.id).sort());
@@ -467,7 +479,7 @@ Deno.test('bandLayout lays out the predbat-memory shape in time bands with no tw
 });
 
 Deno.test('goalLinks links the goal to intents that link to nothing, and none without a goal', () => {
-  const g = predbatShape();
+  const g = sampleBoard();
   assertEquals(goalLinks(g), [{ parent: 'goal', child: 'A' }]);
   assertEquals(goalLinks(board([mem('i', 'intent', 0)])), []);
 });
@@ -557,6 +569,40 @@ Deno.test('citations keeps outgoing derived-from and relates-to links, once each
   const many = Array.from({ length: 8 }, (_, i) => l('derived-from', 'out', `m${i}`));
   assertEquals(citations(many, 5), { ids: ['m0', 'm1', 'm2', 'm3', 'm4'], more: 3 });
   assertEquals(citations(undefined), { ids: [], more: 0 });
+});
+
+Deno.test('citations drops memories the graph shows were created after the intent', () => {
+  const l = (type: string, direction: string, memoryId: string) => ({ type, direction, memoryId });
+  const links = [
+    l('derived-from', 'out', 'f1'),
+    l('relates-to', 'both', 'later-hint'),
+    l('relates-to', 'both', 'unknown'),
+    l('derived-from', 'out', 'same-time'),
+  ];
+  const times: Record<string, string> = {
+    f1: '2026-01-01T09:00:00Z',
+    'later-hint': '2026-01-01T11:00:00Z',
+    'same-time': '2026-01-01T10:00:00Z',
+  };
+  const time = { before: '2026-01-01T10:00:00Z', createdAt: (id: string) => times[id] ?? null };
+  assertEquals(citations(links, 5, time), { ids: ['f1', 'unknown', 'same-time'], more: 0 });
+  const many = [
+    ...Array.from({ length: 3 }, (_, i) => l('relates-to', 'both', `late${i}`)),
+    ...Array.from({ length: 6 }, (_, i) => l('derived-from', 'out', `m${i}`)),
+  ];
+  const late = (id: string) => id.startsWith('late') ? '2026-01-01T11:00:00Z' : '2026-01-01T09:00:00Z';
+  assertEquals(citations(many, 5, { before: '2026-01-01T10:00:00Z', createdAt: late }), {
+    ids: ['m0', 'm1', 'm2', 'm3', 'm4'],
+    more: 1,
+  });
+});
+
+Deno.test('builtBefore keeps a cited memory created no later than the intent', () => {
+  const intent = { createdAt: '2026-01-01T10:00:00Z' };
+  assert(builtBefore({ createdAt: '2026-01-01T09:59:59Z' }, intent));
+  assert(builtBefore({ createdAt: '2026-01-01T10:00:00Z' }, intent));
+  assert(!builtBefore({ createdAt: '2026-01-01T10:00:01Z' }, intent));
+  assert(builtBefore({ createdAt: 'not a time' }, intent));
 });
 
 Deno.test('progressFields reads round, best result, established and open questions', () => {

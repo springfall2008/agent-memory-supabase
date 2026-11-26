@@ -71,4 +71,5 @@ Evidence: <what lets someone check it: the command and its key output, a file pa
 By: <your worker label>
 ```
 
-The last line, `By:`, names you. It lets the board's viewer find your log, so keep it as the final line.
+The last line, `By:`, names you. It holds the bare label, with nothing after it. It lets the board's viewer find your
+log, so keep it as the final line.

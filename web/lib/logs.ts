@@ -164,14 +164,24 @@ function isResultLine(line: string): boolean {
   }
 }
 
+/**
+ * Whether the runner's state lists `label` as a running worker. No state file means not listed. A state file that
+ * exists but cannot be read or parsed counts as listed: "running" only withholds the unfinished last line, so guessing
+ * running is the safe side.
+ */
 async function listedRunning(boardDir: string, label: string): Promise<boolean> {
+  let text: string;
   try {
-    const state = JSON.parse(await Deno.readTextFile(`${boardDir}/state.json`));
-    const workers = state?.workers;
+    text = await Deno.readTextFile(`${boardDir}/state.json`);
+  } catch (err) {
+    return !(err instanceof Deno.errors.NotFound);
+  }
+  try {
+    const workers = JSON.parse(text)?.workers;
     if (typeof workers !== 'object' || workers === null) return false;
     return Object.values(workers).some((w) => (w as { label?: unknown } | null)?.label === label);
   } catch {
-    return false;
+    return true;
   }
 }
 

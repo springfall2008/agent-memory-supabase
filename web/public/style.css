@@ -258,6 +258,10 @@ main {
   color: var(--warn);
 }
 
+.conn-stale::before {
+  color: var(--warn);
+}
+
 .conn-signed-out::before {
   color: var(--bad);
 }

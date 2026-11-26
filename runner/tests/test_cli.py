@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from board_runner.board_file import Measure, WorkerSlot
 from board_runner.cli import Runner, main, prune_worker_logs
@@ -231,6 +232,42 @@ class RunnerTest(unittest.TestCase):
         h.runner.run(takeover=False)
         self.assertEqual(set(seen["running"]), {"0", "1"})
         self.assertEqual(seen["finished"], {})
+
+    def test_worker_label_is_regenerated_while_a_log_for_it_exists(self):
+        h = self.harness(bf=board(workers=(WorkerSlot("haiku", 120),)))
+        logs = h.board_dir / "workers"
+        logs.mkdir()
+        (logs / "3-board-b-aaaa.jsonl").write_text("old\n")
+        (logs / "1-board-b-bbbb.json").write_text("{}")
+        labels = iter(["board-b-aaaa", "board-b-bbbb", "board-b-cccc"])
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        with mock.patch("board_runner.cli.new_label", side_effect=lambda b, role: "board-b-lead-abcd" if role == "lead" else next(labels)):
+            h.runner.run(takeover=False)
+        self.assertEqual((logs / "3-board-b-aaaa.jsonl").read_text(), "old\n")
+        self.assertTrue((logs / "0-board-b-cccc.jsonl").exists())
+        self.assertFalse((logs / "0-board-b-aaaa.jsonl").exists())
+        self.assertFalse((logs / "0-board-b-bbbb.jsonl").exists())
+
+    def test_save_state_replaces_the_file_whole(self):
+        h = self.harness()
+        h.runner.save_state({"workers": {"0": {"label": "board-b-1234"}}})
+        replaced = []
+        real_replace = os.replace
+
+        def spy(src, dst):
+            src, dst = Path(src), Path(dst)
+            # The new content is complete before it takes the state file's name.
+            self.assertEqual(json.loads(src.read_text()), {"workers": {}})
+            self.assertEqual(json.loads(dst.read_text())["workers"], {"0": {"label": "board-b-1234"}})
+            replaced.append((src.parent, dst))
+            real_replace(src, dst)
+
+        with mock.patch("board_runner.cli.os.replace", side_effect=spy):
+            h.runner.save_state({"workers": {}})
+        self.assertEqual(replaced, [(h.board_dir, h.board_dir / "state.json")])
+        self.assertEqual(json.loads((h.board_dir / "state.json").read_text()), {"workers": {}})
+        self.assertEqual(sorted(p.name for p in h.board_dir.iterdir()), ["state.json"])
 
     def test_prune_keeps_newest_200(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -64,19 +64,36 @@ export function latestMeasurement(nodes, before) {
 }
 
 /**
- * The memories an intent cites: its outgoing `derived-from` links and its `relates-to` links, each once.
+ * The memories an intent cites: its outgoing `derived-from` links and its `relates-to` links, each once. With `time`,
+ * a memory known to be created after the intent (such as a later hint that relates to it) is left out: it is not
+ * something the intent built on.
  * @param {Link[] | undefined} links
  * @param {number} [max]
+ * @param {{ before: string; createdAt(id: string): string | null }} [time] the intent's creation time, and the
+ *   creation time of a memory when it is known
  * @returns {{ ids: string[]; more: number }}
  */
-export function citations(links, max = CITATIONS_MAX) {
+export function citations(links, max = CITATIONS_MAX, time) {
   const seen = new Set();
   for (const l of links ?? []) {
     const cites = (l.type === 'derived-from' && l.direction === 'out') || l.type === 'relates-to';
-    if (cites) seen.add(l.memoryId);
+    if (!cites) continue;
+    const at = time?.createdAt(l.memoryId) ?? null;
+    if (time && at !== null && !builtBefore({ createdAt: at }, { createdAt: time.before })) continue;
+    seen.add(l.memoryId);
   }
   const all = [...seen];
   return { ids: all.slice(0, max), more: Math.max(0, all.length - max) };
+}
+
+/**
+ * Whether a cited memory can be something the intent built on: created no later than the intent. An unreadable time
+ * keeps it.
+ * @param {{ createdAt: string }} cited
+ * @param {{ createdAt: string }} intent
+ */
+export function builtBefore(cited, intent) {
+  return !(Date.parse(cited.createdAt) > Date.parse(intent.createdAt));
 }
 
 /**

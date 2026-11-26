@@ -275,6 +275,11 @@ What was decided while building, beyond or against the text above.
   `(label: <label>)` or, once done, through its fact. It trims a trailing partial line while a worker runs, and a
   symlink out of the folder reads the same as an absent file, so the route cannot be used to test whether a path exists.
   An empty buffer takes the first chunk at any offset, because a tail read starts partway into the file.
+  "Still running" comes only from `state.json` and the transcript's `result` line. It does not fall back to the
+  intent's claim, as the log section above planned: the claim only changes the not-found message ("Working on another
+  machine: no local log"). A state file that exists but cannot be parsed counts as listing the worker, since "running"
+  only withholds the unfinished last line. The lead writes no worker log, so its label shows how to attach to its tmux
+  session instead.
 - **Runner:** workers use `stream-json`; finished workers leave `state.json`; the newest 200 transcripts per board are
   kept. A first run in a new workspace folder waits at Claude Code's folder-trust dialog until the person accepts it
   in the lead's tmux session.

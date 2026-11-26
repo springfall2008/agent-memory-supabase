@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from '@std/assert';
 import { type Config, loadConfig } from '../../web/lib/config.ts';
 import { hostAllowed } from '../../web/lib/guard.ts';
-import { proxyApi } from '../../web/lib/proxy.ts';
+import { proxyApi, UPSTREAM_TIMEOUT_MS } from '../../web/lib/proxy.ts';
 import { serveStatic } from '../../web/lib/static.ts';
 import { handle } from '../../web/server.ts';
 
@@ -322,6 +322,33 @@ Deno.test('proxyApi turns a thrown fetch into 502 without leaking the token or u
   assert(!text.includes(SECRET) && !text.includes('supabase.co'));
 });
 
+Deno.test('proxyApi gives up on an upstream that never answers and returns 502', async () => {
+  let signal: AbortSignal | null | undefined;
+  const fn = ((_input: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+    });
+  }) as typeof fetch;
+  const res = await proxyApi(new Request('http://localhost:8787/api/graph'), CFG, fn, 20);
+  assertEquals(res.status, 502);
+  assertEquals(await res.json(), { error: 'web-api unreachable' });
+  assert(signal?.aborted);
+});
+
+Deno.test('proxyApi passes a 15 second timeout signal by default', async () => {
+  let signal: AbortSignal | null | undefined;
+  const fn = ((_input: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return Promise.resolve(jsonOk());
+  }) as typeof fetch;
+  const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assert(signal instanceof AbortSignal && !signal.aborted);
+  assertEquals(UPSTREAM_TIMEOUT_MS, 15_000);
+});
+
 Deno.test('proxyApi treats an upstream redirect as 502 and never follows it', async () => {
   const { fn, calls } = fakeFetch(() =>
     new Response(null, { status: 302, headers: { location: 'https://evil.example/' } })
@@ -451,5 +478,37 @@ Deno.test('handle keeps the content type of a static file', async () => {
     const res = await handle(new Request('http://localhost:8787/', { headers: LOCAL }), deps);
     assertEquals(res.headers.get('content-type'), 'text/html; charset=utf-8');
     await res.body?.cancel();
+  });
+});
+
+Deno.test('handle turns an unexpected throw into a secured 500 and logs no error text', async () => {
+  await withServer(async (deps) => {
+    // A response whose status cannot be read makes the proxy throw past its own catch.
+    const broken = (() =>
+      Promise.resolve(
+        {
+          get status(): number {
+            throw new Error('boom /private/path/to/file');
+          },
+        } as unknown as Response,
+      )) as typeof fetch;
+    const logged: unknown[][] = [];
+    const real = console.error;
+    console.error = (...args: unknown[]) => logged.push(args);
+    let res: Response;
+    try {
+      res = await handle(new Request('http://localhost:8787/api/scopes', { headers: LOCAL }), {
+        ...deps,
+        fetchFn: broken,
+      });
+    } finally {
+      console.error = real;
+    }
+    assertEquals(res.status, 500);
+    assertEquals(await res.json(), { error: 'internal error' });
+    assertEquals(res.headers.get('x-content-type-options'), 'nosniff');
+    assertEquals(res.headers.get('cache-control'), 'no-store');
+    assertEquals(logged.length, 1);
+    assert(!JSON.stringify(logged.map((a) => a.map(String))).includes('/private/path'));
   });
 });

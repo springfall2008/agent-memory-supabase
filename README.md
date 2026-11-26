@@ -192,8 +192,8 @@ see [Development](#development).
   more" raises the limit up to 100 (ranked search has no offset). Looking does not count as an access, so it does not
   change a memory's decay. A "Graph" button on any tag opens that tag's graph.
 - **Board:** pick a board (its scope and `board:` tag together) and see it as a graph, updated every 3 seconds while the
-  tab is visible. The strip above shows the goal's state, the round, intents used out of `Max intents:`, the best
-  result and the lead's latest progress line. The page says when it last refreshed and when the connection fails.
+  tab is visible. The strip above shows the goal's state, the round, intents used out of `Max intents:` and the best
+  result. The page says when it last refreshed, when the connection fails, and "stale" when a refresh is overdue.
   - Each round is a horizontal band, with its intents in a row and each intent's results directly beneath it. Faint
     "Round n" labels separate the bands. A board whose intents have no `round:<n>` tag is grouped as "Batch n"
     instead, by gaps of two minutes in creation time. A dashed line joins the goal to any intent that links to

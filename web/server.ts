@@ -23,9 +23,17 @@ async function route(req: Request, deps: Deps): Promise<Response> {
   return await serveStatic(deps.staticRoot, pathname);
 }
 
-/** The whole local server: host check first, then the API proxy, the log reader or the static files. */
+/**
+ * The whole local server: host check first, then the API proxy, the log reader or the static files. Anything that
+ * throws becomes a 500 with a fixed message, and only a fixed line is logged, since error text can hold paths.
+ */
 export async function handle(req: Request, deps: Deps): Promise<Response> {
-  return secured(await route(req, deps));
+  try {
+    return secured(await route(req, deps));
+  } catch {
+    console.error('web: a request failed with an unexpected error');
+    return secured(Response.json({ error: 'internal error' }, { status: 500 }));
+  }
 }
 
 if (import.meta.main) {

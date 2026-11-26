@@ -1,7 +1,8 @@
 // The detail drawer: one memory, with Memory, Links and Worker log tabs, sliding in over the right of the page.
 import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
-import { citations, foundLine, latestMeasurement, measurementVerdict, progressFields } from './facts.js';
+import { roundOf } from './bands.js';
+import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdict, progressFields } from './facts.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 
@@ -156,15 +157,21 @@ export async function openDrawer(id, ctx) {
 
   const label = workerLabel(memory) ?? (kindOf(memory.tags) === 'intent' ? await factLabel(memory) : null);
   if (my !== seq || label === null) return;
-  const board = logBoard(label, ctx.board, memory.tags);
+  const runner = logBoard(label, ctx.board, memory.tags);
   ui.tabs.log.hidden = false;
-  if (board === null) {
+  if (runner === null) {
     ui.panels.log.replaceChildren(
       h('p', 'log-label', `Worker ${label}`),
       h('p', 'drawer-message', 'No local log: this label is not a board runner label'),
     );
+  } else if (runner.lead) {
+    // The lead runs interactively in tmux and writes no worker log.
+    ui.panels.log.replaceChildren(
+      h('p', 'log-label', `Lead ${label}`),
+      h('p', 'drawer-message', `The lead runs in the runner's tmux session: tmux attach -t board-${runner.board}`),
+    );
   } else {
-    log = createLogView({ board, label, claimed: memory.claim !== undefined });
+    log = createLogView({ board: runner.board, label, claimed: memory.claim !== undefined });
     ui.panels.log.replaceChildren(log.el);
   }
   selectTab(wanted);
@@ -192,18 +199,20 @@ async function factLabel(intent) {
 }
 
 /**
- * The board whose runner wrote `label`: the shown board or one the memory is tagged with, when the label is that
- * board's runner label (`board-<board>-<hex4>` or `board-<board>-lead-<hex4>`), else null.
+ * The board whose runner made `label`: the shown board or one the memory is tagged with, when the label is that
+ * board's worker label (`board-<board>-<hex4>`) or lead label (`board-<board>-lead-<hex4>`), else null.
  * @param {string} label
  * @param {string | null} shown
  * @param {string[]} tags
+ * @returns {{ board: string; lead: boolean } | null}
  */
 function logBoard(label, shown, tags) {
   const candidates = [shown, ...tags.filter((t) => t.startsWith('board:')).map((t) => t.slice(6))];
   for (const b of candidates) {
     if (!b || !label.startsWith(`board-${b}-`)) continue;
     const rest = label.slice(b.length + 7);
-    if (HEX4.test(rest) || (rest.startsWith('lead-') && HEX4.test(rest.slice(5)))) return b;
+    if (HEX4.test(rest)) return { board: b, lead: false };
+    if (rest.startsWith('lead-') && HEX4.test(rest.slice(5))) return { board: b, lead: true };
   }
   return null;
 }
@@ -384,20 +393,34 @@ function factResult(m) {
 function intentStart(m, ctx, my) {
   const box = h('div', 'drawer-context');
   box.append(h('div', 'context-title', 'Starting point'));
-  const cited = citations(m.links);
+  // Times from the drawn graph leave out, before any fetch, a memory made after the intent (such as a later hint).
+  const drawn = new Map((ctx.nodes?.() ?? []).map((n) => [n.id, n.createdAt]));
+  const cited = citations(m.links, undefined, { before: m.createdAt, createdAt: (id) => drawn.get(id) ?? null });
   const builds = h('div', 'context-body');
+  const nothing = () =>
+    h(
+      'p',
+      'note',
+      m.moreLinks
+        ? 'Builds on: not shown.'
+        : roundOf(m.tags) === 1
+        ? 'First round: built on nothing earlier.'
+        : 'Cites nothing earlier.',
+    );
   if (cited.ids.length === 0) {
-    builds.append(h('p', 'note', m.moreLinks ? 'Builds on: not shown.' : 'First round: built on nothing earlier.'));
+    builds.append(nothing());
   } else {
     builds.append(h('p', 'note', 'Loading what it builds on…'));
     Promise.all(cited.ids.map(fetchMemory)).then((found) => {
       if (my !== seq) return;
-      const rows = found.map((f, i) => {
-        if (f === null) return h('p', 'note', `${cited.ids[i].slice(0, 8)}: not readable`);
-        return jump(f.id, verdictFor(f.tags, f.content), shortName(f.content).full, foundLine(f.content), ctx);
+      const rows = found.flatMap((f, i) => {
+        if (f === null) return [h('p', 'note', `${cited.ids[i].slice(0, 8)}: not readable`)];
+        // A memory not drawn on the graph is checked once its time is known.
+        if (!builtBefore(f, m)) return [];
+        return [jump(f.id, verdictFor(f.tags, f.content), shortName(f.content).full, foundLine(f.content), ctx)];
       });
       if (cited.more > 0) rows.push(h('p', 'note', `+${cited.more} more`));
-      builds.replaceChildren(...rows);
+      builds.replaceChildren(...(rows.length ? rows : [nothing()]));
     });
   }
   box.append(contextRow('Builds on', [builds]));

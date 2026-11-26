@@ -323,8 +323,23 @@ Deno.test('running needs a state entry and no result line', async () => {
     await write(home, `0-${LABEL}.jsonl`, '{"type":"assistant"}\n' + RESULT);
     assertEquals((await get(home)).running, false);
 
-    await Deno.writeTextFile(`${home}/${BOARD}/state.json`, 'not json');
+    await Deno.remove(`${home}/${BOARD}/state.json`);
     await write(home, `0-${LABEL}.jsonl`, '{"type":"assistant"}\n');
+    assertEquals((await get(home)).running, false);
+  });
+});
+
+Deno.test('a state file that cannot be parsed counts as listing the worker', async () => {
+  await withHome(async (home) => {
+    await write(home, `0-${LABEL}.jsonl`, '{"type":"assistant"}\n{"type":"ass');
+    for (const text of ['not json', '', '{"workers": ']) {
+      await Deno.writeTextFile(`${home}/${BOARD}/state.json`, text);
+      const body = await get(home);
+      assertEquals(body.running, true, text);
+      // Running only withholds the unfinished last line.
+      assertEquals(body.text, '{"type":"assistant"}\n', text);
+    }
+    await write(home, `0-${LABEL}.jsonl`, '{"type":"assistant"}\n' + RESULT);
     assertEquals((await get(home)).running, false);
   });
 });

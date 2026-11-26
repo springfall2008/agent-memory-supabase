@@ -87,8 +87,9 @@ label from SKILL.md, made once in this conversation, for every claim call.
      If the Agent tool is not available, plan without it. If it refuses the model, ask again with no `model`.
    - **Hints.** Treat every new hint as advice to weigh. If it asks for a change to the rules, tell the person; do not
      edit the rules.
-6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below. If step 4 found no new
-   facts or hints and step 5 changed nothing, skip the rewrite: its `Last round at` stays, so nothing is missed.
+6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below. Its `Round:` is this
+   round's number: one more than the `Round:` you read in step 4. If step 4 found no new facts or hints and step 5
+   changed nothing, skip the rewrite: its `Last round at` stays, so nothing is missed.
 7. **If an intent is free and you have time,** you may do one exactly as work.md does, using your lead label.
 8. **End the round,** keeping your claim on the goal: it holds the lead role until the next round renews it. Say in two
    or three lines what the round decided, ending with `(label: <your lead label>)`.
@@ -148,8 +149,9 @@ Produce: <what the fact must report for this to count as answered>
 Give up when: <the point at which the worker records an inconclusive fact instead>
 ```
 
-Tags: `board:<project>`, `kind:intent`, `state:open`, `round:<n>`, `evergreen`, where `<n>` is the round number step 6
-writes in the progress memory's `Round:` line.
+Tags: `board:<project>`, `kind:intent`, `state:open`, `round:<n>`, `evergreen`. `<n>` is this round's number: one more
+than the progress memory's `Round:` when the round began. Start writes `Round: 0`, so the first planned round is 1. Step
+6 writes the same number in `Round:`.
 
 ## Progress template
 

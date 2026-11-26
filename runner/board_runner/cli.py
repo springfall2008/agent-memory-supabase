@@ -143,7 +143,11 @@ class Runner:
             return {}
 
     def save_state(self, state: dict) -> None:
-        self.state_path.write_text(json.dumps(state, indent=2))
+        # Write a temporary file beside it, then rename it over the state file: a reader (the web UI) never sees it
+        # empty or half-written.
+        tmp = self.state_path.with_name(f".{self.state_path.name}.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, self.state_path)
 
     def interrupt(self, *_args) -> None:
         self.interrupts_pending += 1
@@ -439,10 +443,13 @@ class Runner:
 
     def _start_worker(self, slot: int, scheduler: Scheduler, state: dict, now: float) -> None:
         spec = self.bf.workers[slot]
-        label = new_label(self.bf.board, "worker")
         logs = self.dir / "workers"
         logs.mkdir(exist_ok=True)
         prune_worker_logs(logs)
+        label = new_label(self.bf.board, "worker")
+        # A label names one run: the web UI finds a log by its label alone, whatever the slot.
+        while any(logs.glob(f"*-{label}.jsonl")) or any(logs.glob(f"*-{label}.json")):
+            label = new_label(self.bf.board, "worker")
         path = logs / f"{slot}-{label}.jsonl"
         stdout = path.open("w")
         stderr = (logs / f"{slot}-{label}.err").open("w")
