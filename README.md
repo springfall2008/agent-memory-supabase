@@ -449,6 +449,16 @@ deno task test:int            # against the local database
 supabase functions serve agent-memory & deno task test:e2e   # needs the model download
 ```
 
+`deno task web` starts the web UI on `http://localhost:8787` (read-only, bound to 127.0.0.1) using
+`AGENT_MEMORY_TOKEN` from `.env`. To point it at the local stack instead of the hosted project:
+
+```sh
+supabase start && supabase functions serve web-api        # another shell
+AGENT_MEMORY_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  deno run -A scripts/admin.ts issue-token <local member> web-local     # prints a local token once
+WEB_API_URL=http://127.0.0.1:54321/functions/v1/web-api AGENT_MEMORY_TOKEN=<local token> deno task web
+```
+
 CI (`.github/workflows/ci.yml`) runs everything except the end-to-end test.
 
 ## Known limits

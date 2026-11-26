@@ -3,6 +3,7 @@ import { type Config, loadConfig } from '../../web/lib/config.ts';
 import { hostAllowed } from '../../web/lib/guard.ts';
 import { proxyApi } from '../../web/lib/proxy.ts';
 import { serveStatic } from '../../web/lib/static.ts';
+import { handle } from '../../web/server.ts';
 
 const SECRET = 'tok-secret-value-123';
 
@@ -349,4 +350,106 @@ Deno.test('proxyApi copies only content-type from the upstream headers', async (
   assertEquals(res.headers.get('set-cookie'), null);
   assertEquals(res.headers.get('x-secret'), null);
   await res.body?.cancel();
+});
+
+const LOCAL = { host: 'localhost:8787' };
+
+async function withServer(
+  fn: (deps: { cfg: Config; staticRoot: string; fetchFn: typeof fetch }, calls: Call[]) => Promise<void>,
+): Promise<void> {
+  const root = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${root}/index.html`, '<h1>app</h1>');
+    const { fn: fetchFn, calls } = fakeFetch(jsonOk);
+    await fn({ cfg: CFG, staticRoot: root, fetchFn }, calls);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+Deno.test('handle refuses a foreign Host on every route without reaching a handler', async () => {
+  await withServer(async (deps, calls) => {
+    for (const path of ['/', '/api/scopes', '/logs/b/l']) {
+      const res = await handle(
+        new Request(`http://localhost:8787${path}`, { headers: { host: 'evil.example' } }),
+        deps,
+      );
+      assertEquals(res.status, 403, path);
+      assertEquals(await res.json(), { error: 'host not allowed' }, path);
+    }
+    assertEquals(calls.length, 0);
+  });
+});
+
+Deno.test('handle routes /api to the proxy, /logs to the log reader and the rest to static files', async () => {
+  await withServer(async (deps, calls) => {
+    const api = await handle(new Request('http://localhost:8787/api/scopes', { headers: LOCAL }), deps);
+    assertEquals(api.status, 200);
+    assertEquals(await api.json(), { ok: true });
+    assertEquals(calls.map((c) => c.url), [`${CFG.apiUrl}/scopes`]);
+
+    const log = await handle(new Request('http://localhost:8787/logs/toy/board-toy-ab12', { headers: LOCAL }), deps);
+    assertEquals(log.status, 200);
+    assertEquals((await log.json()).found, false);
+
+    const page = await handle(new Request('http://localhost:8787/', { headers: LOCAL }), deps);
+    assertEquals(page.status, 200);
+    assertEquals(await page.text(), '<h1>app</h1>');
+
+    const missing = await handle(new Request('http://localhost:8787/nope.js', { headers: LOCAL }), deps);
+    assertEquals(missing.status, 404);
+    await missing.body?.cancel();
+    assertEquals(calls.length, 1);
+  });
+});
+
+Deno.test('handle refuses a non-GET method on /logs and on static paths with 405', async () => {
+  await withServer(async (deps, calls) => {
+    for (const path of ['/logs/toy/board-toy-ab12', '/', '/app.js']) {
+      for (const method of ['POST', 'PUT', 'DELETE']) {
+        const res = await handle(
+          new Request(`http://localhost:8787${path}`, { method, headers: LOCAL, body: '{}' }),
+          deps,
+        );
+        assertEquals(res.status, 405, `${method} ${path}`);
+        await res.body?.cancel();
+      }
+    }
+    const api = await handle(
+      new Request('http://localhost:8787/api/memories', { method: 'POST', headers: LOCAL }),
+      deps,
+    );
+    assertEquals(api.status, 405);
+    await api.body?.cancel();
+    assertEquals(calls.length, 0);
+  });
+});
+
+Deno.test('handle adds nosniff and no-store to every kind of response', async () => {
+  await withServer(async (deps) => {
+    const requests: Request[] = [
+      new Request('http://localhost:8787/', { headers: LOCAL }),
+      new Request('http://localhost:8787/nope', { headers: LOCAL }),
+      new Request('http://localhost:8787/api/scopes', { headers: LOCAL }),
+      new Request('http://localhost:8787/api/other', { headers: LOCAL }),
+      new Request('http://localhost:8787/logs/toy/board-toy-ab12', { headers: LOCAL }),
+      new Request('http://localhost:8787/', { method: 'POST', headers: LOCAL }),
+      new Request('http://localhost:8787/', { headers: { host: 'evil.example' } }),
+    ];
+    for (const req of requests) {
+      const res = await handle(req, deps);
+      const what = `${req.method} ${new URL(req.url).pathname} ${res.status}`;
+      assertEquals(res.headers.get('x-content-type-options'), 'nosniff', what);
+      assertEquals(res.headers.get('cache-control'), 'no-store', what);
+      await res.body?.cancel();
+    }
+  });
+});
+
+Deno.test('handle keeps the content type of a static file', async () => {
+  await withServer(async (deps) => {
+    const res = await handle(new Request('http://localhost:8787/', { headers: LOCAL }), deps);
+    assertEquals(res.headers.get('content-type'), 'text/html; charset=utf-8');
+    await res.body?.cancel();
+  });
 });
