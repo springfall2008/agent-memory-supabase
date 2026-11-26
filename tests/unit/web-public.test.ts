@@ -1,5 +1,13 @@
 import { assert, assertEquals } from '@std/assert';
 import { kindOf, shortName, stateOf, verdictOf, workerLabel } from '../../web/public/names.js';
+import {
+  citations,
+  foundLine,
+  isMeasurement,
+  latestMeasurement,
+  measurementVerdict,
+  progressFields,
+} from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
 import { parseTranscript } from '../../web/public/transcript.js';
 import { nextDelay, POLL_MS } from '../../web/public/poll.js';
@@ -483,4 +491,82 @@ Deno.test('fitViewport centres the box and never zooms in past maxZoom', () => {
   assertEquals(fitViewport({ x1: 0, y1: 0, x2: 100000, y2: 10 }, 1000, 600, opts).zoom, 0.2);
   assert(sameViewport(big, { zoom: 0.5, pan: { ...big.pan } }));
   assert(!sameViewport(big, { zoom: 0.5, pan: { x: big.pan.x + 1, y: big.pan.y } }));
+});
+
+// ── facts ──────────────────────────────────────────────────────────
+
+Deno.test('foundLine reads the Found line and ignores a missing or empty one', () => {
+  assertEquals(
+    foundLine('Fact for intent x: n = 7 passes\nDid: ran it\nFound: 7 passes twice\nBy: w'),
+    '7 passes twice',
+  );
+  assertEquals(foundLine('Fact for intent x: n = 7 passes\nBy: w'), null);
+  assertEquals(foundLine('Fact for intent x: r\nFound:   \n'), null);
+  assertEquals(foundLine('Fact for intent x: Found: not a line'), null);
+});
+
+Deno.test('isMeasurement recognises the lead measurement fact by its first line', () => {
+  assert(isMeasurement('Fact for intent none: measurement of 7 passed\nEvidence: x'));
+  assert(isMeasurement('  Fact for intent none: measurement of abc failed'));
+  assert(!isMeasurement('Fact for intent 1234: measurement of 7 passed'));
+  assert(!isMeasurement('Fact for intent none: something else'));
+  assert(!isMeasurement('Evidence: Fact for intent none: measurement of 7 passed'));
+  assert(!isMeasurement(undefined));
+});
+
+Deno.test('measurementVerdict maps passed and failed to confirmed and refuted', () => {
+  assertEquals(measurementVerdict('Fact for intent none: measurement of 7 passed'), 'confirmed');
+  assertEquals(measurementVerdict('Fact for intent none: measurement of 7 failed'), 'refuted');
+  assertEquals(measurementVerdict('Fact for intent none: measurement of 7 hung'), null);
+  assertEquals(measurementVerdict('Fact for intent 1: n = 7 passes'), null);
+});
+
+Deno.test('latestMeasurement takes the newest measurement fact created before the time', () => {
+  const node = (id: string, createdAt: string, text: string, tags = ['kind:fact']) => ({
+    id,
+    createdAt,
+    tags,
+    snippet: text,
+  });
+  const nodes = [
+    node('a', '2026-01-01T10:00:00Z', 'Fact for intent none: measurement of 3 failed'),
+    node('b', '2026-01-01T11:00:00Z', 'Fact for intent none: measurement of 7 passed'),
+    node('c', '2026-01-01T12:00:00Z', 'Fact for intent none: measurement of 9 passed'),
+    node('d', '2026-01-01T10:30:00Z', 'Fact for intent 1: n = 7 passes'),
+    node('e', '2026-01-01T10:45:00Z', 'Fact for intent none: measurement of 5 passed', ['kind:hint']),
+  ];
+  assertEquals(latestMeasurement(nodes, '2026-01-01T11:30:00Z')?.id, 'b');
+  assertEquals(latestMeasurement(nodes, '2026-01-01T10:30:00Z')?.id, 'a');
+  assertEquals(latestMeasurement(nodes, '2026-01-01T09:00:00Z'), null);
+  assertEquals(latestMeasurement(nodes, null)?.id, 'c');
+  assertEquals(latestMeasurement([], null), null);
+});
+
+Deno.test('citations keeps outgoing derived-from and relates-to links, once each, and counts the overflow', () => {
+  const l = (type: string, direction: string, memoryId: string) => ({ type, direction, memoryId });
+  const links = [
+    l('derived-from', 'out', 'f1'),
+    l('derived-from', 'in', 'fact-of-me'),
+    l('relates-to', 'both', 'h1'),
+    l('depends-on', 'out', 'rules'),
+    l('supersedes', 'out', 'old'),
+    l('derived-from', 'out', 'f1'),
+    l('derived-from', 'out', 'f2'),
+  ];
+  assertEquals(citations(links), { ids: ['f1', 'h1', 'f2'], more: 0 });
+  const many = Array.from({ length: 8 }, (_, i) => l('derived-from', 'out', `m${i}`));
+  assertEquals(citations(many, 5), { ids: ['m0', 'm1', 'm2', 'm3', 'm4'], more: 3 });
+  assertEquals(citations(undefined), { ids: [], more: 0 });
+});
+
+Deno.test('progressFields reads round, best result, established and open questions', () => {
+  const text = 'Progress for board b\nRound: 2\nLast round at: x\nEstablished: n = 7 passes (fact 1)\n' +
+    'Best result: n = 7 passes\nOpen questions: does 5 pass?\nIntents: 2';
+  assertEquals(progressFields(text), {
+    round: '2',
+    established: 'n = 7 passes (fact 1)',
+    best: 'n = 7 passes',
+    open: 'does 5 pass?',
+  });
+  assertEquals(progressFields('nothing'), { round: null, established: null, best: null, open: null });
 });

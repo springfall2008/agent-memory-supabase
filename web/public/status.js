@@ -6,7 +6,7 @@
  * @param {string} label
  * @returns {string | null} the trimmed rest of the first `<label>: ` line, or null when there is none
  */
-function field(text, label) {
+export function field(text, label) {
   const m = new RegExp(`^${label}:[ \\t]*(.*)$`, 'm').exec(text);
   return m ? m[1].trim() : null;
 }

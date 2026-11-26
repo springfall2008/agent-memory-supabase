@@ -26,6 +26,8 @@ function onBoardSelect(id) {
   openDrawer(id, {
     board: boardContext && 'board' in boardContext ? boardContext.board : null,
     nameOf: (other) => board.nameOf(other),
+    nodes: () => board.nodes(),
+    progressText: () => board.progressText(),
   });
 }
 

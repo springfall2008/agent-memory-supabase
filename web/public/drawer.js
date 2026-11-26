@@ -1,13 +1,20 @@
 // The detail drawer: one memory, with Memory, Links and Worker log tabs, sliding in over the right of the page.
 import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
+import { citations, foundLine, latestMeasurement, measurementVerdict, progressFields } from './facts.js';
 import { createLogView } from './logview.js';
-import { kindOf, shortName, workerLabel } from './names.js';
+import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 
 /**
  * @typedef {import('../../supabase/functions/_shared/types.ts').Memory} Memory
- * @typedef {{ board: string | null; nameOf?: (id: string) => string | null }} DrawerCtx
+ * @typedef {{
+ *   board: string | null;
+ *   nameOf?: (id: string) => string | null;
+ *   nodes?: () => import('./facts.js').Node[];
+ *   progressText?: () => string;
+ * }} DrawerCtx
  * @typedef {'memory' | 'links' | 'log'} TabName
+ * @typedef {import('./names.js').Verdict} Verdict
  */
 
 const ARROW = { out: '→', in: '←', both: '↔' };
@@ -142,7 +149,7 @@ export async function openDrawer(id, ctx) {
   const name = shortName(memory.content);
   names.set(memory.id, name.label);
   ui.title.textContent = name.full;
-  ui.panels.memory.replaceChildren(...memoryPanel(memory));
+  ui.panels.memory.replaceChildren(...memoryPanel(memory, ctx, my));
   ui.panels.links.replaceChildren(...linksPanel(memory, ctx));
   ui.tabs.links.textContent = `Links (${(memory.links?.length ?? 0) + (memory.moreLinks ?? 0)})`;
   selectTab(wanted);
@@ -218,9 +225,16 @@ function row(label, value) {
   return r;
 }
 
-/** @param {Memory} m @returns {HTMLElement[]} */
-function memoryPanel(m) {
+/**
+ * @param {Memory} m
+ * @param {DrawerCtx} ctx
+ * @param {number} my the drawer sequence this panel belongs to
+ * @returns {HTMLElement[]}
+ */
+function memoryPanel(m, ctx, my) {
   const out = [];
+  const context = contextFor(m, ctx, my);
+  if (context) out.push(context);
   if (m.superseded) out.push(h('p', 'notice', 'Superseded: a newer memory replaces this one.'));
   const tags = h('span', 'drawer-tags');
   tags.append(...m.tags.map((t) => h('span', 'chip chip-plain', t)));
@@ -274,4 +288,171 @@ function linksPanel(m, ctx) {
   const out = [list];
   if (m.moreLinks) out.push(h('p', 'note', `+${m.moreLinks} more`));
   return out;
+}
+
+// ── where the board stood ─────────────────────────────────────────
+
+/** @param {Verdict | null} v */
+function dot(v) {
+  const d = h('span', `verdict-dot dot-${v ?? 'none'}`);
+  d.setAttribute('aria-hidden', 'true');
+  return d;
+}
+
+/** @param {string} id @returns {Promise<Memory | null>} null when the memory cannot be read */
+async function fetchMemory(id) {
+  try {
+    const m = /** @type {{ memory: Memory }} */ (await getJson(`/memories/${encodeURIComponent(id)}`)).memory;
+    names.set(m.id, shortName(m.content).label);
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The verdict of a fact or measurement: its tag, else read from a measurement's "passed"/"failed".
+ * @param {string[]} tags
+ * @param {string} text
+ */
+function verdictFor(tags, text) {
+  return verdictOf(tags) ?? measurementVerdict(text);
+}
+
+/**
+ * A button that opens another memory in the drawer: a verdict dot, the one-line result, and an optional second line.
+ * @param {string} id
+ * @param {Verdict | null} verdict
+ * @param {string} result
+ * @param {string | null} detail
+ * @param {DrawerCtx} ctx
+ */
+function jump(id, verdict, result, detail, ctx) {
+  const b = h('button', 'secondary drawer-cite');
+  b.setAttribute('type', 'button');
+  const text = h('span', 'cite-text');
+  text.append(h('span', 'cite-result', result));
+  if (detail) text.append(h('span', 'cite-detail', detail));
+  b.append(dot(verdict), text);
+  b.title = id;
+  b.addEventListener('click', () => openDrawer(id, ctx));
+  return b;
+}
+
+/** @param {string} label @param {HTMLElement[]} body */
+function contextRow(label, body) {
+  const r = h('div', 'context-row');
+  r.append(h('div', 'context-label', label), ...body);
+  return r;
+}
+
+/**
+ * The block above the Memory tab's details that says where the board stood: the starting point of an intent, the
+ * result of a fact, the progress of a goal. Null for any other memory. Fetches fill it in after it is returned, and
+ * only while the drawer still shows this memory.
+ * @param {Memory} m
+ * @param {DrawerCtx} ctx
+ * @param {number} my
+ * @returns {HTMLElement | null}
+ */
+function contextFor(m, ctx, my) {
+  const kind = kindOf(m.tags);
+  if (kind === 'fact') return factResult(m);
+  if (kind === 'intent') return intentStart(m, ctx, my);
+  if (kind === 'goal') return goalProgress(m, ctx, my);
+  return null;
+}
+
+/** @param {Memory} m */
+function factResult(m) {
+  const verdict = verdictFor(m.tags, m.content);
+  const box = h('div', `drawer-context result-${verdict ?? 'none'}`);
+  const found = foundLine(m.content);
+  box.append(
+    h('div', 'context-label', verdict ? `Result: ${verdict}` : 'Result'),
+    h('div', 'result-first', shortName(m.content).full),
+  );
+  if (found) box.append(h('div', 'result-found', found));
+  return box;
+}
+
+/**
+ * @param {Memory} m
+ * @param {DrawerCtx} ctx
+ * @param {number} my
+ */
+function intentStart(m, ctx, my) {
+  const box = h('div', 'drawer-context');
+  box.append(h('div', 'context-title', 'Starting point'));
+  const cited = citations(m.links);
+  const builds = h('div', 'context-body');
+  if (cited.ids.length === 0) {
+    builds.append(h('p', 'note', m.moreLinks ? 'Builds on: not shown.' : 'First round: built on nothing earlier.'));
+  } else {
+    builds.append(h('p', 'note', 'Loading what it builds on…'));
+    Promise.all(cited.ids.map(fetchMemory)).then((found) => {
+      if (my !== seq) return;
+      const rows = found.map((f, i) => {
+        if (f === null) return h('p', 'note', `${cited.ids[i].slice(0, 8)}: not readable`);
+        return jump(f.id, verdictFor(f.tags, f.content), shortName(f.content).full, foundLine(f.content), ctx);
+      });
+      if (cited.more > 0) rows.push(h('p', 'note', `+${cited.more} more`));
+      builds.replaceChildren(...rows);
+    });
+  }
+  box.append(contextRow('Builds on', [builds]));
+  if (ctx.nodes) box.append(contextRow('Measured before this', [measuredBefore(ctx, m.createdAt)]));
+  return box;
+}
+
+/**
+ * @param {DrawerCtx} ctx
+ * @param {string | null} before
+ */
+function measuredBefore(ctx, before) {
+  const n = latestMeasurement(ctx.nodes?.() ?? [], before);
+  if (n === null) {
+    return h('p', 'note', before === null ? 'Nothing measured yet.' : 'Nothing measured before this intent.');
+  }
+  const text = n.snippet ?? n.content ?? '';
+  return jump(n.id, verdictFor(n.tags, text), shortName(text).full, `measured ${when(n.createdAt)}`, ctx);
+}
+
+/**
+ * @param {Memory} m
+ * @param {DrawerCtx} ctx
+ * @param {number} my
+ */
+function goalProgress(m, ctx, my) {
+  const box = h('div', 'drawer-context');
+  box.append(h('div', 'context-title', 'Progress'));
+  const body = h('div', 'context-body');
+  box.append(body);
+  /** @param {string} text */
+  const show = (text) => {
+    const p = progressFields(text);
+    const rows = /** @type {[string, string | null][]} */ ([
+      ['Round', p.round],
+      ['Best result', p.best],
+      ['Established', p.established],
+      ['Open questions', p.open],
+    ]).map(([k, v]) => contextRow(k, [h('div', 'context-value', v ?? 'unknown')]));
+    const last = ctx.nodes ? [contextRow('Latest measurement', [measuredBefore(ctx, null)])] : [];
+    body.replaceChildren(...rows, ...last);
+  };
+  const known = ctx.progressText?.() ?? '';
+  if (known !== '') {
+    show(known);
+    return box;
+  }
+  body.append(h('p', 'note', 'Loading progress…'));
+  // The Board tab has not loaded the progress memory (Browse, or the first poll): find it through the goal's links.
+  const ids = (m.links ?? []).filter((l) => l.type === 'depends-on' && l.direction === 'in').slice(0, FACT_LOOKUPS);
+  Promise.all(ids.map((l) => fetchMemory(l.memoryId))).then((found) => {
+    if (my !== seq) return;
+    const progress = found.find((f) => f !== null && kindOf(f.tags) === 'progress');
+    if (progress) show(progress.content);
+    else body.replaceChildren(h('p', 'note', 'No progress memory that you can read.'));
+  });
+  return box;
 }

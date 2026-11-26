@@ -33,7 +33,7 @@ import { parseStatus } from './status.js';
  * @param {Element} el
  * @param {{ onSelect(id: string): void }} opts
  * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void;
- *   nameOf(id: string): string | null }}
+ *   nameOf(id: string): string | null; nodes(): any[]; progressText(): string }}
  */
 export function mountBoard(el, opts) {
   const picker = /** @type {HTMLSelectElement} */ (h('select', 'board-picker'));
@@ -298,6 +298,10 @@ export function mountBoard(el, opts) {
       const n = loop?.prev?.nodes.find((/** @type {any} */ x) => x.id === id);
       return n ? shortName(n.snippet ?? n.content ?? '').label : null;
     },
+    /** The nodes of the shown graph, for the drawer's "where the board stood" context. */
+    nodes: () => loop?.prev?.nodes ?? [],
+    /** The full content of the shown board's progress memory, or '' when it is not loaded. */
+    progressText: () => loop?.progressText ?? '',
   };
 }
 

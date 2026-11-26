@@ -1,7 +1,8 @@
 // Seeds a small blackboard, tagged board:toy-ui, for checking the web UI by eye. Local database only: it always uses
 // the fixed local URL, never AGENT_MEMORY_DB_URL or .env.
 //   deno run -A scripts/seed-web-toy.ts --seed <scope>              goal, rules, progress, two round:1 intents (one
-//                                                                   claimed), a fact and a hint: 7 memories
+//                                                                   claimed), a fact, a lead measurement fact
+//                                                                   and a hint: 8 memories
 //   deno run -A scripts/seed-web-toy.ts --seed <scope> --goal-only  the goal alone ("No intents yet.")
 //   deno run -A scripts/seed-web-toy.ts --advance                   a live change: a refuted fact appears, intent 1 is
 //                                                                   done, and a round:2 intent cites the first fact
@@ -80,11 +81,20 @@ async function seed(sql: Sql, scope: string, goalOnly: boolean): Promise<void> {
       tx,
       s.id,
       who,
-      `Fact for intent ${i1}: n = 7 passes the check\nEvidence: ran it twice\nBy: board-toy-ui-ab12`,
+      `Fact for intent ${i1}: n = 7 passes the check\nDid: ran the check twice\nFound: n = 7 passes, both times\nEvidence: ran it twice\nBy: board-toy-ui-ab12`,
       ['kind:fact', 'verdict:confirmed'],
       40,
     );
     await link(tx, fact, i1, 'derived-from', who);
+    // The lead's measurement fact, created between the two intents.
+    await insert(
+      tx,
+      s.id,
+      who,
+      'Fact for intent none: measurement of 7 passed\nEvidence: the check printed OK\nBy: board-toy-ui-lead-ef56',
+      ['kind:fact', 'verdict:confirmed'],
+      35,
+    );
     const i2 = await insert(tx, s.id, who, 'Intent: try n = 5 with the faster parser\nWhy: the fact above', [
       'kind:intent',
       'state:open',

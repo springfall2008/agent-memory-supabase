@@ -417,6 +417,102 @@ main {
   overflow-wrap: anywhere;
 }
 
+.drawer-context {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.drawer-context.result-confirmed {
+  border-left-color: var(--ok);
+}
+
+.drawer-context.result-refuted {
+  border-left-color: var(--bad);
+}
+
+.drawer-context.result-inconclusive {
+  border-left-color: var(--muted);
+}
+
+.context-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.context-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.context-row {
+  margin-top: 6px;
+}
+
+.context-body p {
+  margin: 2px 0;
+}
+
+.context-value,
+.result-first,
+.result-found {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.result-first {
+  font-weight: 600;
+}
+
+.result-found {
+  margin-top: 2px;
+}
+
+.drawer-cite {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin-top: 2px;
+  text-align: left;
+}
+
+.cite-text {
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.cite-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.verdict-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.verdict-dot.dot-confirmed {
+  background: var(--ok);
+}
+
+.verdict-dot.dot-refuted {
+  background: var(--bad);
+}
+
+.verdict-dot.dot-none {
+  background: transparent;
+  border: 1px solid var(--muted);
+}
+
 .drawer-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
