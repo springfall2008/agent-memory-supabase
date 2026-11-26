@@ -14,17 +14,49 @@ reasons about the whole board and writes intents. Any number of sessions work, o
 
 `/blackboard <command> <project> [text]`. `<project>` is lower-case kebab, for example `release-notes`.
 
-| Command                   | What to do                                                                    |
-| ------------------------- | ----------------------------------------------------------------------------- |
-| `start <project>`         | Read `start.md` in this skill's directory and follow it                       |
-| `lead <project>`          | Read `lead.md` and follow it: one reasoning round                             |
-| `lead <project> takeover` | As `lead`, but take over the lead role from a session the person says is dead |
-| `work <project>`          | Read `work.md` and follow it: one work cycle                                  |
-| `hint <project> <text>`   | Below                                                                         |
-| `status <project>`        | Below                                                                         |
-| `stop <project>`          | Below                                                                         |
+| Command                                       | What to do                                                                    |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `start <project>`                             | Read `start.md` in this skill's directory and follow it                       |
+| `start <project> from=<file>`                 | Read `start.md` and follow its "From a board file" section                    |
+| `lead <project>`                              | Read `lead.md` and follow it: one reasoning round                             |
+| `lead <project> takeover`                     | As `lead`, but take over the lead role from a session the person says is dead |
+| `work <project>`                              | Read `work.md` and follow it: one work cycle                                  |
+| `hint <project> <text>`                       | Below                                                                         |
+| `status <project>`                            | Below                                                                         |
+| `stop <project>`                              | Below                                                                         |
+| `resume <project> [max_intents=<n>]`          | Below                                                                         |
+| `release <project> label=<label> minutes=<n>` | Below                                                                         |
 
-The shared-memory tools may be deferred. Load them first with ToolSearch, query `+shared-memory`.
+The shared-memory tools may be deferred. Load them first with ToolSearch, query `+shared-memory`, `max_results 30`.
+
+### Arguments for lead and work
+
+After `<project>`, `lead` and `work` accept these words, in any order:
+
+- `label=<label>`: use this session label rather than making one. A board runner passes it.
+- `runner`: runner mode. A board runner started this session and reads its output. The recipes say what changes; above
+  all, the **very last line** of your final message is one output line from the table below, after `(label: …)`.
+- `measure` (lead only): a measurement must confirm the goal before it is concluded. See lead.md.
+- `measured <ref> pass|fail output=<path>` (lead only): the result of measuring a candidate. See lead.md.
+- `takeover` (lead only): as in the table above.
+
+### Output lines in runner mode
+
+| Line                                           | When                                                            |
+| ---------------------------------------------- | --------------------------------------------------------------- |
+| `BOARD-WORK fact <verdict> intent=<id>`        | work: a fact was recorded, or one already existed (its verdict) |
+| `BOARD-WORK none`                              | work: no free intent                                            |
+| `BOARD-WORK partial intent=<id>`               | work: the claim was lost and a partial-result hint was stored   |
+| `BOARD-WORK stopped`                           | work: the goal is missing or not running                        |
+| `BOARD-LEAD running free=<n> open=<n>`         | lead: the round is done                                         |
+| `BOARD-LEAD candidate <ref> free=<n> open=<n>` | lead, with `measure`: the goal looks met by `<ref>`             |
+| `BOARD-LEAD done`                              | lead: the goal was concluded as met                             |
+| `BOARD-LEAD stopped`                           | lead: the goal is not running, or was concluded unreachable     |
+| `BOARD-LEAD outgrown`                          | lead: the intent list was truncated                             |
+| `BOARD-LEAD refused <holder> <until>`          | lead: another session holds the lead                            |
+
+Write the line exactly as shown, with no other text, quotes or formatting on it. `free` is the number of open intents
+with no active claim once this round's writes are done. `open` is the number of open intents, claimed or not.
 
 ## The board
 
@@ -63,6 +95,8 @@ session label fails.
 
 ## Session label
 
+If the command gives `label=<label>`, use that label and skip the rest of this section.
+
 Each session makes one label, the first time it runs a blackboard command in this conversation, and reuses it for every
 claim and release afterwards:
 
@@ -83,6 +117,10 @@ Each `lead` or `work` invocation is one round or one cycle. To keep going, run i
 `/loop /blackboard work <project>` in each worker terminal, and `/loop /blackboard lead <project>` in the lead's. When a
 recipe says **end the loop**, finish this invocation and do not schedule another: in a self-paced `/loop`, schedule no
 further wake-up; in a fixed-interval `/loop`, delete its cron job.
+
+Use a self-paced `/loop` (no interval), so each round or cycle picks its own delay from the board, as the recipes say.
+Only the lead writes intents, and it cannot be woken by a fact, so it paces short whenever workers are, or soon will be,
+waiting for work. A worker paces about 5 minutes between empty cycles so that it outlasts the lead's gap.
 
 ## hint
 
@@ -113,3 +151,28 @@ oldest first. Report, in this order:
 1. Find the goal.
 2. `update` its tags, swapping `state:running` for `state:stopped`.
 3. Write nothing else. Every lead and worker sees the stopped state at its next step and ends its loop.
+
+## resume
+
+This continues a board that stopped because it reached its intent limit.
+
+1. Find the goal, and read the conclusion with `graph`, `tags_all ["board:<project>", "kind:conclusion"]`, full detail.
+2. Check that the goal is `state:stopped` and that a conclusion contains `Stopped: intent limit`. If not, say why the
+   board cannot be resumed this way (it is running, done, or was stopped for another reason) and write nothing.
+3. Work out the new limit:
+   - with `max_intents=<n>`, it must be higher than the goal's current `Max intents`, or say so and write nothing;
+   - without it, the new limit is `none`.
+4. `update` the goal's content with `Max intents: <new limit>`, keeping every other line. Then `update` its tags,
+   swapping `state:stopped` for `state:running`.
+5. Leave the old conclusion in place. The next lead to conclude links its conclusion `supersedes` it.
+
+## release
+
+A board runner uses this after it kills a worker that ran over its time limit.
+
+1. Call `my_claims`. Keep the claims whose session label is `<label>` and whose memory has the tag `board:<project>`.
+2. For each one:
+   - store a hint, `Hint: Worker timed out after <n> minutes on intent <memory id>` with a second line
+     `From: board runner`, tagged `board:<project>`, `kind:hint` and `evergreen`, and link it `relates-to` the intent;
+   - call `release_claim` on it with `session_label <label>`.
+3. Write nothing else. Say how many claims you released.

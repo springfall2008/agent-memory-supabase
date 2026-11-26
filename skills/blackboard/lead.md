@@ -32,7 +32,8 @@ label from SKILL.md, made once in this conversation, for every claim call.
 5. **Decide**, and do every part that applies.
    - **Done.** The facts meet the goal's Done when.
      1. Store a conclusion with the template below. Tag it `board:<project>`, `kind:conclusion`, `evergreen`. Link it
-        `derived-from` each fact that proves it.
+        `derived-from` each fact that proves it. If the board already has a conclusion, from a stop at the intent limit,
+        link the new one `supersedes` it.
      2. Swap the goal's `state:running` for `state:done`, keeping its other tags.
      3. Swap `state:open` for `state:dropped` on every open intent.
      4. Rewrite progress (step 6), release your claim on the goal, and **end the loop**.
@@ -42,6 +43,18 @@ label from SKILL.md, made once in this conversation, for every claim call.
      `verdict:` tag, and link it `supersedes` the wrong one.
    - **Drop.** An open intent that nobody holds a claim on has become pointless. Swap its `state:open` for
      `state:dropped`.
+     - An intent with two or more `Worker timed out` hints `relates-to` it is too big for one worker. Drop it, and in
+       Plan write smaller intents that cover it, if the intent limit allows.
+   - **Intent limit.** If the goal has a `Max intents` number, count every intent on the board, in any state. Plan
+     writes no intent that would take the count past the limit.
+     - Done comes first: if the facts meet Done when, do Done (or, with `measure`, propose the candidate) even at the
+       limit. With `measure`, a candidate not yet measured also comes first: propose it, and stop at the limit only once
+       no unmeasured candidate remains.
+     - When the count has reached the limit and no intent is open, stop the board instead of planning. Store a
+       conclusion with the template below whose first line ends `Stopped: intent limit of <n> reached`. Its `Shown by:`
+       gives the best result so far and the facts behind it, and it is linked `derived-from` those facts. Then do the
+       rest of Unreachable: the goal becomes `state:stopped`.
+     - If the board already has a conclusion from an earlier stop, link the new one `supersedes` it.
    - **Plan.** Count the open intents, claimed or not. Write new intents until that count reaches the goal's
      `Max open intents`. Each new intent must:
      - not overlap any open intent, or any done intent whose fact already answers it;
@@ -51,13 +64,60 @@ label from SKILL.md, made once in this conversation, for every claim call.
        intents.
 
      When two results look like they would combine, an intent to combine them and check the result is a normal intent.
-     If nothing is open, the goal is not met and it is not unreachable, write at least one intent.
+     If nothing is open, the goal is not met, it is not unreachable and the intent limit allows, write at least one
+     intent.
    - **Hints.** Treat every new hint as advice to weigh. If it asks for a change to the rules, tell the person; do not
      edit the rules.
-6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below.
+6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below. If step 4 found no new
+   facts or hints and step 5 changed nothing, skip the rewrite: its `Last round at` stays, so nothing is missed.
 7. **If an intent is free and you have time,** you may do one exactly as work.md does, using your lead label.
 8. **End the round,** keeping your claim on the goal: it holds the lead role until the next round renews it. Say in two
    or three lines what the round decided, ending with `(label: <your lead label>)`.
+9. **Pace the next round** (self-paced `/loop`). Count the open intents nobody holds a claim on.
+   - **None free:** about 5 minutes. Workers that finish their intent will find nothing to claim until you plan again.
+   - **Some free:** about 15 minutes.
+   - Never more than 25 minutes, so your 30-minute claim on the goal does not lapse between rounds.
+
+## In runner mode
+
+When the command includes `runner`, a board runner sends each round and starts the workers.
+
+- Skip step 7: do no intents yourself. Skip step 9: schedule nothing, since the runner decides when the next round is.
+- Before ending, count `free` and `open` (SKILL.md, Output lines) from the intents as they stand after your writes:
+  re-read them with `graph` if you wrote or changed any.
+- Your final message ends with `(label: <your lead label>)`, then, as its very last line, exactly one of:
+  - step 2, the goal missing or not running: `BOARD-LEAD stopped`;
+  - step 3, refused: `BOARD-LEAD refused <holder's session label> <until>`;
+  - step 4, truncated: `BOARD-LEAD outgrown`;
+  - step 5, Done: `BOARD-LEAD done`; Unreachable, or stopped at the intent limit: `BOARD-LEAD stopped`;
+  - with `measure`, a candidate (below): `BOARD-LEAD candidate <ref> free=<n> open=<n>`;
+  - otherwise: `BOARD-LEAD running free=<n> open=<n>`.
+
+### With `measure`
+
+The command says `measure` when the board has a measurement that must confirm the goal before it is concluded.
+
+- **Done becomes a proposal.** When the facts appear to meet Done when, do not conclude. Pick `<ref>`: what the proving
+  facts name as the result, such as a branch, commit, path or value, with no spaces. Do the rest of the round as usual,
+  then end with the `candidate` line.
+- **`<ref>` is exactly the result that gets measured.** The runner passes it unchanged to the measurement command as
+  `BOARD_CANDIDATE`. Use the bare value, branch, commit or path, such as `38` rather than `n=38`, and never a name you
+  make up.
+- **Never propose a `<ref>` that has already been measured.** A measurement fact for it, below, says so. After a failed
+  measurement, plan work toward a different result. Do not rename the same result to measure it again.
+- **`measured <ref> pass output=<path>`.** Read the file at `<path>`. Store a fact with the work.md template:
+  - `Fact for intent none: measurement of <ref> passed`, with the file's key lines as `Evidence:`;
+  - tagged `verdict:confirmed`;
+  - linked `derived-from` the facts that named `<ref>`.
+
+  Then do Done. After storing the conclusion, link it with `relate_memories`, `type "derived-from"`, once to this
+  measurement fact and once to each fact that named `<ref>`. A conclusion with no links cannot be checked, so make these
+  calls before you change any tags.
+- **`measured <ref> fail output=<path>`.** Store the same kind of fact, but `measurement of <ref> failed` and
+  `verdict:refuted`. Then carry on with the round: the failure is new information to plan from.
+- **A goal with `Measure: yes` whose command lacks `measure`.** The person is leading by hand. When the facts appear to
+  meet Done when, do not conclude. Tell the person the candidate and ask them to run the measurement, then end the
+  round.
 
 ## Intent template
 

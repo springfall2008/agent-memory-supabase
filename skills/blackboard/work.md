@@ -13,8 +13,10 @@ conversation, for every claim call.
    - `minutes`: the goal's claim minutes;
    - `session_label`: your label;
    - `description`: `Working on this for board <project>`.
-3. **If nothing is free** (`claimed: false`), say `No free intent (empty cycle <k> of 3, label: <your label>)`, where
-   `<k>` counts empty cycles in a row in this conversation. If `<k>` is 3, **end the loop**. Otherwise end this cycle.
+3. **If nothing is free** (`claimed: false`), say `No free intent (empty cycle <k> of 6, label: <your label>)`, where
+   `<k>` counts empty cycles in a row in this conversation. If `<k>` is 6, **end the loop**. Otherwise end this cycle,
+   and in a self-paced `/loop` wait about 5 minutes before the next: the lead plans on its own timer, up to 25 minutes
+   apart, so six cycles 5 minutes apart outlast its gap. After a cycle that did an intent, start the next one at once.
 4. **Check it is not already done.** Call `neighbours` on the intent with `direction "in"`, `types ["derived-from"]` and
    `detail "short"`. If any neighbour has the tag `kind:fact`, a previous worker already recorded its result before
    stopping. Skip to step 8 and write no fact.
@@ -44,6 +46,20 @@ conversation, for every claim call.
      other tag kept.
    - Call `release_claim` on the intent with your `session_label`.
    - Say in one line what the fact recorded, ending with `(label: <your label>)`. That ends the cycle.
+
+## In runner mode
+
+When the command includes `runner`, this cycle is the whole run: do one cycle, schedule nothing, and **end the loop**.
+There is no empty-cycle count or pacing. Your final message ends with `(label: <your label>)`, then, as its very last
+line, exactly one of:
+
+- step 1, the goal missing or not running: `BOARD-WORK stopped`;
+- step 3, nothing free: `BOARD-WORK none`;
+- step 6, the claim refused: `BOARD-WORK partial intent=<intent id>`;
+- step 8, after storing your fact: `BOARD-WORK fact <its verdict> intent=<intent id>`;
+- step 8, reached from step 4 or step 6 because a fact already existed: the same `fact` line, with that fact's verdict.
+
+The verdict is the word after `verdict:`, for example `confirmed`.
 
 ## Fact template
 
