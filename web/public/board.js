@@ -3,7 +3,7 @@ import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { diffGraph } from './diff.js';
 import { clock, h, option } from './dom.js';
 import { createGraphView } from './graphview.js';
-import { kindOf, stateOf } from './names.js';
+import { kindOf, shortName, stateOf } from './names.js';
 import { nextDelay, POLL_MS } from './poll.js';
 import { boardHash } from './route.js';
 import { parseStatus } from './status.js';
@@ -32,7 +32,8 @@ import { parseStatus } from './status.js';
 /**
  * @param {Element} el
  * @param {{ onSelect(id: string): void }} opts
- * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void }}
+ * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void;
+ *   nameOf(id: string): string | null }}
  */
 export function mountBoard(el, opts) {
   const picker = /** @type {HTMLSelectElement} */ (h('select', 'board-picker'));
@@ -278,6 +279,11 @@ export function mountBoard(el, opts) {
   return {
     showBoard: (scope, board) => start({ kind: 'board', scope, board }),
     showTag: (tag) => start({ kind: 'tag', tag }),
+    /** The graph label of a node on the shown graph, or null when it is not drawn. */
+    nameOf: (id) => {
+      const n = loop?.prev?.nodes.find((/** @type {any} */ x) => x.id === id);
+      return n ? shortName(n.snippet ?? n.content ?? '').label : null;
+    },
   };
 }
 

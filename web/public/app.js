@@ -1,6 +1,7 @@
 // The app shell: the Browse | Board tabs, hash routing, and the shared node/row selection.
 import { mountBoard } from './board.js';
 import { mountBrowse } from './browse.js';
+import { openDrawer } from './drawer.js';
 import { parseHash, tagHash } from './route.js';
 
 const tabs = {
@@ -18,16 +19,18 @@ let lastBoardHash = '#board';
 let shownKey = '';
 
 /**
- * Seam for the detail drawer (next task: `openDrawer(id, { board })` from drawer.js replaces this body).
+ * Open the drawer from the Board graph, which knows the shown board and the short names of its nodes.
  * @param {string} id
  */
-function onSelect(id) {
-  document.body.dataset.selected = id;
-  console.log('selected', id, boardContext);
+function onBoardSelect(id) {
+  openDrawer(id, {
+    board: boardContext && 'board' in boardContext ? boardContext.board : null,
+    nameOf: (other) => board.nameOf(other),
+  });
 }
 
 const browse = { mounted: false };
-const board = mountBoard(panels.board, { onSelect });
+const board = mountBoard(panels.board, { onSelect: onBoardSelect });
 
 /** @param {'browse' | 'board'} which */
 function showTab(which) {
@@ -37,7 +40,10 @@ function showTab(which) {
   }
   if (which === 'browse' && !browse.mounted) {
     browse.mounted = true;
-    mountBrowse(panels.browse, { onSelect, onGraphTag: (tag) => (location.hash = tagHash(tag)) });
+    mountBrowse(panels.browse, {
+      onSelect: (id) => openDrawer(id, { board: null }),
+      onGraphTag: (tag) => (location.hash = tagHash(tag)),
+    });
   }
 }
 
