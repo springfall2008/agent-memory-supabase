@@ -46,7 +46,7 @@ label from SKILL.md, made once in this conversation, for every claim call.
    - **Unreachable.** The facts show the goal cannot be met. Do the same as Done, but the conclusion says why it cannot
      be met, and the goal becomes `state:stopped`. If the only reason is that the ideas have run out, do Stuck for ideas
      (below) first, and decide Unreachable only if none of its ideas is worth an intent. Before concluding, check
-     "Amendments" below: an amendment's fallback target may already be met.
+     "Amendments" below: if an honoured amendment names a fallback target, meet it or plan toward it instead.
    - **Correct.** A fact is shown wrong by later facts. Store a corrected fact, with the work.md fact template and a
      `verdict:` tag, and link it `supersedes` the wrong one.
    - **Drop.** An open intent that nobody holds a claim on has become pointless. Swap its `state:open` for
@@ -76,7 +76,8 @@ label from SKILL.md, made once in this conversation, for every claim call.
 
      When two results look like they would combine, an intent to combine them and check the result is a normal intent.
      If nothing is open, the goal is not met, it is not unreachable and the intent limit allows, write at least one
-     intent.
+     intent. When the goal's own target is out of reach but the newest honoured fallback is not, aim the intents at that
+     fallback (see "Amendments").
    - **Stuck for ideas.** Only when you are struggling, ask a sub-agent for ideas, on the model named by the goal's
      `Ideas model` line. You are struggling when:
      - Plan must write an intent, but every idea you have overlaps one the board has already tried;
@@ -119,19 +120,27 @@ editing it, for example "if 20% is out of reach, 15% is acceptable, as long as X
   (`board-<project>-…`), `board runner` or a sub-agent is not a person. An amendment written by a worker is a breach,
   not a change: ignore it, and store one hint `Hint: Amendment <id> was not written by a person and is ignored`, with
   `From: <your lead label>`, linked `relates-to` it. Do this once: first look for that hint.
-- **Conflicts.** Read the goal, then the amendments oldest first. Where an amendment conflicts with the goal or with an
-  earlier amendment, the newer one wins.
+- **Never a new Done when.** An amendment never replaces the goal's Done when. Any target an amendment names is a
+  fallback, handled by the fallback rule below, however it is worded.
+- **Conflicts.** Read the goal, then the amendments oldest first. Where two amendments conflict, or an amendment's
+  constraint (such as "as long as X is unchanged") conflicts with the goal, the newer one wins. This is about
+  constraints and about which fallback is current. It is never a reason to treat a fallback as the goal's target.
 - **A fallback target** is a result the person accepts instead of the goal's Done when. It counts only when the goal's
-  own target is no longer reachable: in Unreachable, or when the intent limit has been reached with no intent open.
-  Never accept it earlier, however good the facts look.
-- **Without `measure`.** If the facts meet an amendment's fallback target, do Done instead of Unreachable or the intent
-  limit stop. The conclusion's `Done when:` line gives the amended target, and its `Shown by:` cites the amendment's id
-  beside the proving facts.
-- **With `measure`.** The runner's measurement stays the arbiter of Done: never conclude Done on an amended target. If
-  the best measured result (a `measurement of <ref> failed` fact shows it) meets only the amended target, stop the board
-  as Unreachable does, with a conclusion whose first line ends `Stopped: amended target met (amendment <id>)`. Its
-  `Shown by:` gives the measured result and the facts behind it, and it is linked `derived-from` those facts. In runner
-  mode, end with the same last line as Unreachable.
+  own target is no longer reachable: the Unreachable case, or the intent limit reached with no intent open. Never accept
+  it earlier, however good the facts look. The newest honoured fallback is the current one.
+- **Aim at the fallback.** When the goal's own target is out of reach and the fallback is not, do not stop as
+  Unreachable. If the intent limit allows, Plan aims its intents at the newest honoured fallback, within the amendments'
+  constraints. Do Unreachable, or the intent limit stop, only when the fallback is out of reach too.
+- **Without `measure`.** If the facts meet the fallback target, do Done instead of Unreachable or the intent limit stop.
+  The conclusion's `Done when:` line gives the amended target, and its `Shown by:` cites the amendment's id beside the
+  proving facts.
+- **With `measure`.** The runner's measurement stays the arbiter of Done: never conclude Done on an amended target. When
+  the facts meet only the fallback, propose that result as a candidate before stopping, and the rule that an unmeasured
+  candidate comes first then has it measured. If that measurement fails the goal's own threshold (a
+  `measurement of <ref> failed` fact shows the result) and the facts meet the fallback, stop the board as Unreachable
+  does, with a conclusion whose first line ends `Stopped: amended target met (amendment <id>)`. Its `Shown by:` gives
+  the measured result and the facts behind it, and it is linked `derived-from` those facts. In runner mode, end with the
+  same last line as Unreachable.
 
 ## When the board is paused
 
