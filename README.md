@@ -140,6 +140,10 @@ ln -s "$PWD/skills/blackboard" ~/.claude/skills/blackboard
 | `/blackboard lead <project> takeover` | Takes over the lead from a session you know is dead |
 | `/blackboard work <project>` | One work cycle: claim an intent, do it, record a fact |
 | `/blackboard hint <project> <text>` | Adds advice for the lead |
+| `/blackboard intent <project> <text>` | Adds an intent of your own, which the lead never drops as pointless |
+| `/blackboard amend <project> <text>` | Adds an amendment: a sub-goal or fallback the lead reads with the goal |
+| `/blackboard pause <project>` | Holds the lead still (`state:paused`); workers finish open intents |
+| `/blackboard resume-lead <project>` | Undoes `pause` |
 | `/blackboard status <project>` | Shows where the run stands (read-only) |
 | `/blackboard stop <project>` | Stops every lead and worker at its next step |
 
@@ -168,9 +172,13 @@ the board file reference are in [`runner/README.md`](runner/README.md).
 
 ## Web UI
 
-A local web page for looking at the store and at a running board, without driving an agent to do it. It is read-only:
-it cannot write, claim, link or delete anything. It is also local-only: `deno task web` binds to `127.0.0.1`, serves
-`http://localhost:8787`, and refuses any request whose `Host` header is not `localhost` or `127.0.0.1`.
+A local web page for looking at the store and at a running board, and for steering a board without driving an agent to
+do it. Browse is read-only. On a board you can add hints, intents and amendments and control the run, and those are the
+only writes it makes. The controls change only the goal's state tag and its `Max intents` line. The one delete is of a
+hint, intent or amendment it has just stored, when linking it fails. It never writes outside a board. It is also
+local-only:
+`deno task web` binds to `127.0.0.1`, serves `http://localhost:8787`, and refuses any request whose `Host` header is
+not `localhost` or `127.0.0.1`.
 
 <img width="1878" height="957" alt="image" src="https://github.com/user-attachments/assets/49e446e8-5132-497b-82a6-1034d5b2d334" />
 
@@ -188,8 +196,9 @@ It reads `.env` (see `.env.example`):
 | `WEB_PORT` | 8787 | The local port |
 | `BOARD_RUNNER_HOME` | `~/.board-runner` | Where the board runner keeps worker logs |
 
-The page calls a separate `web-api` Edge Function (read-only GET routes), so polling never loads the embedding model.
-It runs as the token's member, so it shows what that member can read and nothing else. Deploying `web-api` to a hosted
+The page calls a separate `web-api` Edge Function, so polling never loads the embedding model. Its read routes are GET;
+its write routes are POST and are listed under "Writing to a board". It runs as the token's member, so it shows what
+that member can read, and writes only where that member can write. Deploying `web-api` to a hosted
 project is a hosted change, like any other: see "Rules that bite" in `CLAUDE.md`. To try it against the local stack,
 see [Development](#development).
 
@@ -210,7 +219,71 @@ see [Development](#development).
 - **Drawer:** click a node for three tabs. **Memory** has the full content, tags, scope and claim. For an intent it
   starts with "Starting point": what it builds on and the latest measurement before it. For a fact it shows the result
   first, and for the goal the progress fields and latest measurement. **Links** lists links in and out, and clicking
-  one selects that node. **Worker log** is described next.
+  one selects that node. **Worker log** is described next. On a board, the Memory tab also has the write forms
+  described in "Writing to a board".
+
+### Writing to a board
+
+On the Board tab, the Memory tab of a node's drawer has forms below its content. A form is disabled while its request
+is in flight. On success it clears, says "Added — it will appear in the graph shortly" and polls the graph at once. On
+failure it shows the server's error. If the board is over 400 nodes, the page warns that what you add may not appear.
+
+- **Add hint**, on every node. It is advice for the lead, read at its next round. On an intent, fact or hint it links
+  to that node. On the goal, conclusion, progress or rules node it links to nothing and applies to the whole board. A
+  hint is allowed in any board state.
+- **Add intent**, on the goal and on facts, while the board is running or paused. Write what a worker should try, and
+  optionally "Done when" and "Give up when". Left empty, they become "a fact reporting what trying this showed" and
+  "it cannot be done within the board's rules; record an inconclusive fact". On a fact, the intent is linked
+  `derived-from` it. The form shows how many intents the board has used out of `Max intents`. A person's intent is
+  accepted even over the limit, and the lead never drops it as pointless: only a fact closes it.
+- **Add amendment**, on the goal, in any state but done. An amendment is a sub-goal or fallback, such as "if 20% is
+  out of reach, 15% is acceptable, as long as X is unchanged". The goal stays as written, and the lead reads every
+  amendment with it, the newer winning a conflict. A fallback applies only once the goal's own target is out of reach.
+  Without `[measure]`, meeting it concludes the board as done, citing the amendment. With `[measure]`, the runner's
+  measurement stays the arbiter, so the lead stops with `Stopped: amended target met (amendment <id>)`. The drawer
+  lists the board's amendments.
+- **Controls**, on the goal. Each changes the goal memory in the database, so it works for a board run on any
+  machine. Only the buttons valid for the goal's state are shown.
+  - **Pause lead** (while running) swaps `state:running` for `state:paused`. The lead plans nothing new and writes
+    nothing, but keeps its claim and ends each round with `BOARD-LEAD paused`. Workers finish what they hold and take
+    intents that are already open, including ones you add. The runner keeps going and asks the lead for a round every
+    2 minutes, so **Resume lead** is seen within about that time.
+  - **Stop** (while running or paused) sets `state:stopped`, after a confirmation in the page that focuses Cancel.
+    Workers end at their next step, and the runner lets running workers finish, then exits.
+  - **Restart** (when stopped) sets `state:running` again and says to run `board-runner run <board file>` again to
+    start the workers. It is not offered when the goal is done.
+  - **Intent limit** shows the goal's `Max intents` and saves a whole number, or `none`. Saving rewrites that line and
+    keeps the rest of the goal. Once the count of intents reaches a lowered limit, the lead plans no more, and it stops
+    the board once no intent is open. Raising it on a board that stopped at its limit sets it running again, as `/blackboard resume` does, with
+    the same note to run the runner again. A higher `max_intents` in the board file raises it again on the next
+    `board-runner run`.
+
+The browser sends only text and the node it is about. The server builds every word of the template, every tag and every
+link, and folds line breaks in your text to spaces so no field can forge another line. The same writes are available in
+a Claude session as `/blackboard hint`, `intent`, `amend`, `pause`, `resume-lead` and `stop`.
+
+Amendments are guarded by a rule for now: workers never change the goal, the rules or an amendment, and the lead
+honours only an amendment whose `From:` line names a person. That is a convention, not enforcement. A follow-up is a
+separate bot member for agents, with a database rule that bot members cannot write `kind:amendment`, `kind:goal` or
+`kind:rules` or edit the goal.
+
+**The write routes** (on `web-api`, all `POST` with a JSON body, as the token's member):
+
+| Route | Body | Result |
+|-------|------|--------|
+| `/hints` | `scope`, `board`, `text`, `about?` | 201 `{ memory }` |
+| `/intents` | `scope`, `board`, `text`, `produce?`, `giveUp?`, `from?` | 201 `{ memory }`; 409 `Board is not running` unless running or paused |
+| `/amendments` | `scope`, `board`, `text` | 201 `{ memory }`; 409 when the board is done |
+| `/boards/control` | `scope`, `board`, `action?` (`pause`, `resume`, `stop`, `restart`), `maxIntents?` (number or `"none"`) | 200 `{ goal }`; 409 `Board is <state>` when the action is not allowed from there |
+
+`text` is 1 to 2,000 characters; `produce` and `giveUp` at most 500. A board or memory the caller cannot read gives a
+404 that reads the same whether it is absent or unreadable. If linking fails after a memory is stored, the route
+deletes the memory it stored and returns the error.
+
+The local server forwards exactly these four POST routes, besides its GET routes. A POST must carry `Content-Type:
+application/json` and prove it came from the server's own page (`Sec-Fetch-Site: same-origin`, or an `Origin` equal to
+the page's own when that header is absent), or it is refused with 403. The body is at most 16 KiB, and a write gets a
+30 s timeout, against 15 s for a read. A retry after a timeout can leave a duplicate.
 
 ### Worker log
 
@@ -519,7 +592,7 @@ deno task test:int            # against the local database
 supabase functions serve agent-memory & deno task test:e2e   # needs the model download
 ```
 
-`deno task web` starts the web UI on `http://localhost:8787` (read-only, bound to 127.0.0.1) using
+`deno task web` starts the web UI on `http://localhost:8787` (bound to 127.0.0.1) using
 `AGENT_MEMORY_TOKEN` from `.env`. To point it at the local stack instead of the hosted project:
 
 ```sh

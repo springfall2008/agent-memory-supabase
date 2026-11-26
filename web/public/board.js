@@ -6,7 +6,7 @@ import { createGraphView } from './graphview.js';
 import { kindOf, shortName, stateOf } from './names.js';
 import { connState, nextDelay, POLL_MS, STALE_MS } from './poll.js';
 import { boardHash } from './route.js';
-import { parseStatus } from './status.js';
+import { boardStatus } from './status.js';
 
 /**
  * @typedef {{ kind: 'board'; scope: string; board: string } | { kind: 'tag'; tag: string }} Target
@@ -27,14 +27,21 @@ import { parseStatus } from './status.js';
  *   conn: 'loading' | 'live' | 'retrying';
  *   error: string | null;
  *   refreshed: Date | null;
+ *   again: boolean;
+ *   waiters: (() => void)[];
  * }} Loop
+ * @typedef {import('./status.js').BoardStatus & { truncated: boolean }} ShownStatus
  */
+
+/** Goal states the strip colours. */
+const STATES = ['running', 'paused', 'stopped', 'done'];
 
 /**
  * @param {Element} el
  * @param {{ onSelect(id: string): void }} opts
  * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void;
- *   nameOf(id: string): string | null; nodes(): any[]; progressText(): string }}
+ *   nameOf(id: string): string | null; nodes(): any[]; progressText(): string; status(): ShownStatus | null;
+ *   pollNow(): Promise<void> }}
  */
 export function mountBoard(el, opts) {
   const picker = /** @type {HTMLSelectElement} */ (h('select', 'board-picker'));
@@ -127,15 +134,14 @@ export function mountBoard(el, opts) {
     const nodes = me.prev?.nodes ?? [];
     const parts = [];
     if (t.kind === 'board') {
-      const goal = nodes.find((/** @type {any} */ n) => kindOf(n.tags) === 'goal');
-      const status = parseStatus(me.goalText, me.progressText);
-      const intents = nodes.filter((/** @type {any} */ n) => kindOf(n.tags) === 'intent').length;
+      const status = boardStatus(nodes, me.goalText, me.progressText);
       const max = status.maxIntents === 'none' ? 'no limit' : status.maxIntents ?? 'unknown';
+      const state = status.state ?? 'unknown';
       parts.push(
         item(`${t.board} · ${t.scope}`, 'name'),
-        item(`State: ${(goal && stateOf(goal.tags)) ?? 'unknown'}`),
+        item(`State: ${state}`, STATES.includes(state) ? `state state-${state}` : 'state'),
         item(`Round ${status.round ?? 'unknown'}`),
-        item(`Intents ${intents} of ${max}`),
+        item(`Intents ${status.intents} of ${max}`),
         item(`Best: ${status.best ?? 'unknown'}`, 'best'),
       );
     } else {
@@ -174,6 +180,12 @@ export function mountBoard(el, opts) {
     me.cancelled = true;
     clearTimeout(me.timer);
     me.ctrl.abort();
+    settle(me);
+  }
+
+  /** Resolve every `pollNow` promise waiting on this loop. @param {Loop} me */
+  function settle(me) {
+    for (const done of me.waiters.splice(0)) done();
   }
 
   function signOut() {
@@ -257,7 +269,29 @@ export function mountBoard(el, opts) {
     if (ok) me.error = null;
     me.delay = nextDelay(me.delay, ok);
     renderStrip(me);
-    me.timer = setTimeout(() => tick(me), me.delay);
+    // A write landed while this poll was in flight, so it may predate the write: poll again at once.
+    const again = me.again;
+    me.again = false;
+    if (!again) settle(me);
+    me.timer = setTimeout(() => tick(me), again ? 0 : me.delay);
+  }
+
+  /**
+   * Poll the shown graph now, after a write: the pending timer is dropped and a poll starts, or, while one is in
+   * flight, another follows it at once. Never two at a time. While the graph is hidden the poll waits for it to show.
+   * @returns {Promise<void>} settles once a poll that started after this call has finished, or the loop has stopped
+   */
+  function pollNow() {
+    const me = loop;
+    if (!me || me.cancelled) return Promise.resolve();
+    return new Promise((resolve) => {
+      me.waiters.push(resolve);
+      if (me.busy) me.again = true;
+      else if (!me.paused) {
+        clearTimeout(me.timer);
+        tick(me);
+      }
+    });
   }
 
   function resume() {
@@ -293,6 +327,8 @@ export function mountBoard(el, opts) {
       conn: 'loading',
       error: null,
       refreshed: null,
+      again: false,
+      waiters: [],
     };
     loop = me;
     syncPicker();
@@ -319,6 +355,12 @@ export function mountBoard(el, opts) {
     nodes: () => loop?.prev?.nodes ?? [],
     /** The full content of the shown board's progress memory, or '' when it is not loaded. */
     progressText: () => loop?.progressText ?? '',
+    /** The strip's numbers for the shown board, or null for a tag graph or before the first poll. */
+    status: () => {
+      if (!loop?.prev || loop.target.kind !== 'board') return null;
+      return { ...boardStatus(loop.prev.nodes, loop.goalText, loop.progressText), truncated: !!loop.prev.truncated };
+    },
+    pollNow,
   };
 }
 

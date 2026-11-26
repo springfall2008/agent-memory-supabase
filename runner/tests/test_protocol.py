@@ -63,8 +63,19 @@ class ParseLeadTest(unittest.TestCase):
             LeadResult("refused", holder="me", until="2026-11-25T10:00:00Z"),
         )
 
+    def test_paused(self):
+        self.assertEqual(parse_lead("BOARD-LEAD paused free=2 open=3"), LeadResult("paused", free=2, open=3))
+
     def test_none(self):
-        for text in (None, "", "asked a question", "BOARD-LEAD running free=x", "BOARD-LEAD candidate free=1 open=1"):
+        for text in (
+            None,
+            "",
+            "asked a question",
+            "BOARD-LEAD running free=x",
+            "BOARD-LEAD candidate free=1 open=1",
+            "BOARD-LEAD paused",
+            "BOARD-LEAD paused free=1",
+        ):
             with self.subTest(text=text):
                 self.assertEqual(parse_lead(text), LeadResult("none"))
 

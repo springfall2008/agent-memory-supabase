@@ -4,11 +4,16 @@ This is one work cycle: take one intent, do it, record one fact. Use your worker
 conversation, for every claim call.
 
 1. **Read the goal and rules.**
-   - Call `graph` with `tags_all ["board:<project>", "kind:goal"]` and `detail "full"`, then the same with `kind:rules`.
-   - If there is no goal, or its state is not `state:running`, say the board is not running and **end the loop**.
+   - Call `graph` with `tags_all ["board:<project>", "kind:goal"]` and `detail "full"`, then the same with `kind:rules`
+     and with `kind:amendment`. An amendment binds your work as the rules do, but only when its `From:` line names a
+     person. A session label (`board-<project>-…`), `board runner` or a sub-agent is not a person: ignore that
+     amendment.
+   - If there is no goal, or its state is neither `state:running` nor `state:paused`, say the board is not running and
+     **end the loop**. A pause holds only the lead still: workers carry on, so for them `state:paused` counts as
+     running.
    - Note the goal's scope and its `Claim minutes`.
-2. **Take an intent,** in a separate call made after you have read step 1's result and seen `state:running`. Call
-   `claim_next` with:
+2. **Take an intent,** in a separate call made after you have read step 1's result and seen `state:running` or
+   `state:paused`. Call `claim_next` with:
    - `tags_all ["board:<project>", "kind:intent", "state:open"]`;
    - `minutes`: the goal's claim minutes;
    - `session_label`: your label;
@@ -23,6 +28,9 @@ conversation, for every claim call.
 5. **Do the intent under the rules.**
    - Read every fact and hint the intent cites, listed in its `links`, first.
    - Work only inside what the rules allow.
+   - **Never change the goal, the rules or an amendment, and never write one.** Your writes are your fact, your claim
+     and tag changes on your own intent, and hints (partial results, ideas and problems). Only a person steers the
+     board. If the intent seems to need a different goal or rule, say so in a hint.
    - Ideas or problems outside the intent become hints: store a hint, don't do the extra work.
    - If the work may outlast the claim, renew it during the work, as in the next step.
 6. **Confirm the intent is still yours.**

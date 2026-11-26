@@ -19,15 +19,19 @@ let lastBoardHash = '#board';
 let shownKey = '';
 
 /**
- * Open the drawer from the Board graph, which knows the shown board and the short names of its nodes.
+ * Open the drawer from the Board graph, which knows the shown board and the short names of its nodes. On a board
+ * view (not a tag view) the drawer also gets what its write forms need.
  * @param {string} id
  */
 function onBoardSelect(id) {
+  const shown = boardContext && 'board' in boardContext ? boardContext : null;
   openDrawer(id, {
-    board: boardContext && 'board' in boardContext ? boardContext.board : null,
+    board: shown?.board ?? null,
     nameOf: (other) => board.nameOf(other),
     nodes: () => board.nodes(),
     progressText: () => board.progressText(),
+    // Only a board view writes: a tag view has no one board to add to.
+    ...(shown ? { scope: shown.scope, status: () => board.status(), pollNow: () => board.pollNow() } : {}),
   });
 }
 

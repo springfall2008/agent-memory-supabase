@@ -3,6 +3,7 @@ import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
 import { roundOf } from './bands.js';
 import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdict, progressFields } from './facts.js';
+import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 
@@ -10,10 +11,13 @@ import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
  * @typedef {import('../../supabase/functions/_shared/types.ts').Memory} Memory
  * @typedef {{
  *   board: string | null;
+ *   scope?: string;
  *   nameOf?: (id: string) => string | null;
  *   nodes?: () => import('./facts.js').Node[];
  *   progressText?: () => string;
- * }} DrawerCtx
+ *   status?: () => import('./board.js').ShownStatus | null;
+ *   pollNow?: () => Promise<void>;
+ * }} DrawerCtx `scope`, `status` and `pollNow` come only from the Board tab's board view, and turn on the write forms
  * @typedef {'memory' | 'links' | 'log'} TabName
  * @typedef {import('./names.js').Verdict} Verdict
  */
@@ -82,6 +86,11 @@ function build() {
     const t = /** @type {Element} */ (e.target);
     // Escape in a field outside the drawer belongs to that field.
     if (t instanceof Element && t.matches('input, select, textarea') && !root.contains(t)) return;
+    // Escape in a drawer form with something typed leaves the field rather than throwing the text away.
+    if ((t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) && root.contains(t) && t.value !== '') {
+      t.blur();
+      return;
+    }
     closeDrawer();
   });
   return { root, title, tabs, panels };
@@ -273,6 +282,11 @@ function memoryPanel(m, ctx, my) {
     out.push(box);
   }
   out.push(h('div', 'drawer-content', m.content));
+  const { board, scope, nodes, status, pollNow } = ctx;
+  if (board && scope && nodes && status && pollNow) {
+    const hooks = { live: () => my === seq, open: (/** @type {string} */ id) => openDrawer(id, ctx) };
+    out.push(...writeSection(m, { board, scope, nodes, status, pollNow }, hooks));
+  }
   return out;
 }
 

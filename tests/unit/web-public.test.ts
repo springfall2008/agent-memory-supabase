@@ -12,7 +12,7 @@ import {
 import { diffGraph } from '../../web/public/diff.js';
 import { parseTranscript } from '../../web/public/transcript.js';
 import { connState, nextDelay, POLL_MS, STALE_MS } from '../../web/public/poll.js';
-import { parseStatus } from '../../web/public/status.js';
+import { boardStatus, parseStatus } from '../../web/public/status.js';
 import { applyChunk, emptyLog } from '../../web/public/logbuf.js';
 import { boardHash, parseHash, tagHash } from '../../web/public/route.js';
 import {
@@ -24,6 +24,24 @@ import {
   sameViewport,
   structureChanged,
 } from '../../web/public/bands.js';
+import {
+  ACTION_LABELS,
+  amendmentsOf,
+  controlActions,
+  controlDone,
+  FIELD_MAX,
+  GIVE_UP_DEFAULT,
+  hintLinks,
+  intentUsage,
+  limitText,
+  needsRunAgain,
+  offersIntent,
+  parseLimit,
+  PRODUCE_DEFAULT,
+  refusedState,
+  TEXT_MAX,
+} from '../../web/public/writes.js';
+import * as server from '../../supabase/functions/_shared/board-writes.ts';
 
 // ── names ──────────────────────────────────────────────────────────
 
@@ -56,6 +74,12 @@ Deno.test('shortName never exceeds max and leaves no space before the ellipsis',
     assert(n.label.endsWith('…'));
   }
   assertEquals(shortName('short', 28).label, 'short');
+});
+
+Deno.test('kindOf reads kind:amendment and shortName strips the Amendment prefix', () => {
+  assertEquals(kindOf(['board:toy', 'kind:amendment', 'evergreen']), 'amendment');
+  assertEquals(shortName('Amendment: 15% is acceptable\nFrom: someone').full, '15% is acceptable');
+  assertEquals(shortName('Amendment:').label, '(empty)');
 });
 
 Deno.test('kindOf, verdictOf and stateOf read their tags', () => {
@@ -240,6 +264,116 @@ Deno.test('parseStatus reads round, max intents and best result', () => {
   assertEquals(parseStatus('Goal: x', ''), { round: null, maxIntents: null, best: null });
 });
 
+Deno.test('boardStatus counts drawn intents and reads the goal state with parseStatus', () => {
+  const nodes = [
+    { tags: ['kind:goal', 'state:paused'] },
+    { tags: ['kind:intent', 'state:open'] },
+    { tags: ['kind:intent', 'state:done'] },
+    { tags: ['kind:fact'] },
+  ];
+  assertEquals(boardStatus(nodes, 'Max intents: 5', 'Round: 2'), {
+    state: 'paused',
+    intents: 2,
+    round: 2,
+    maxIntents: 5,
+    best: null,
+  });
+  assertEquals(boardStatus([], '', '').state, null);
+  assertEquals(boardStatus([], '', '').intents, 0);
+});
+
+// ── writes ─────────────────────────────────────────────────────────
+
+Deno.test('writes keeps the server defaults and limits', () => {
+  assertEquals(PRODUCE_DEFAULT, server.PRODUCE_DEFAULT);
+  assertEquals(GIVE_UP_DEFAULT, server.GIVE_UP_DEFAULT);
+  assertEquals(TEXT_MAX, server.TEXT_MAX);
+  assertEquals(FIELD_MAX, server.FIELD_MAX);
+});
+
+Deno.test('offersIntent: goal and facts, only while running or paused', () => {
+  for (const state of ['running', 'paused']) {
+    assert(offersIntent(['kind:goal'], state));
+    assert(offersIntent(['kind:fact'], state));
+    assert(!offersIntent(['kind:intent'], state));
+    assert(!offersIntent(['kind:hint'], state));
+    assert(!offersIntent(['kind:amendment'], state));
+  }
+  for (const state of ['stopped', 'done', null]) {
+    assert(!offersIntent(['kind:goal'], state));
+    assert(!offersIntent(['kind:fact'], state));
+  }
+});
+
+Deno.test('hintLinks: intents, facts and hints are linked; the rest is board-wide', () => {
+  assertEquals(
+    ['intent', 'fact', 'hint', 'goal', 'rules', 'progress', 'conclusion', 'amendment'].map((k) =>
+      hintLinks([`kind:${k}`])
+    ),
+    [true, true, true, false, false, false, false, false],
+  );
+});
+
+Deno.test('controlActions offers only the buttons valid in each state, as the server allows', () => {
+  assertEquals(controlActions('running'), ['pause', 'stop']);
+  assertEquals(controlActions('paused'), ['resume', 'stop']);
+  assertEquals(controlActions('stopped'), ['restart']);
+  assertEquals(controlActions('done'), []);
+  assertEquals(controlActions(null), []);
+  assertEquals(controlActions('mystery'), []);
+  for (const state of ['running', 'paused', 'stopped', 'done']) {
+    for (const a of server.BOARD_ACTIONS) {
+      assertEquals(controlActions(state).includes(a), server.transition(state, a) !== null, `${a} from ${state}`);
+    }
+  }
+  assertEquals(Object.keys(ACTION_LABELS).sort(), [...server.BOARD_ACTIONS].sort());
+});
+
+Deno.test('intentUsage says how many intents of the limit the board has used', () => {
+  assertEquals(intentUsage(3, 5), 'This board has used 3 of 5 intents.');
+  assertEquals(intentUsage(5, 5), 'This board has used 5 of 5 intents. Yours is still accepted.');
+  assertEquals(intentUsage(2, 'none'), 'This board has used 2 intents, no limit.');
+  assertEquals(intentUsage(0, null), 'This board has used 0 intents; its limit is unknown.');
+});
+
+Deno.test('parseLimit takes a positive whole number or none; limitText shows the goal value', () => {
+  assertEquals(parseLimit(' 12 '), { ok: true, value: 12 });
+  assertEquals(parseLimit('None'), { ok: true, value: 'none' });
+  assertEquals(parseLimit('no limit'), { ok: true, value: 'none' });
+  for (const bad of ['', '0', '-1', '2.5', 'ten', '1e3', '99999999999999999999']) assert(!parseLimit(bad).ok, bad);
+  assertEquals([limitText(7), limitText('none'), limitText(null)], ['7', 'none', '']);
+});
+
+Deno.test('refusedState reads the state from a refused control, and nothing else', () => {
+  assertEquals(refusedState('Board is paused'), { state: 'paused' });
+  assertEquals(refusedState('Board is stopped'), { state: 'stopped' });
+  assertEquals(refusedState('Board is unknown'), { state: null });
+  assertEquals(refusedState('Board is not running'), null);
+  assertEquals(refusedState('Board b not found'), null);
+  assertEquals(refusedState('Database error'), null);
+  assertEquals(refusedState('Board is done.'), null);
+});
+
+Deno.test('needsRunAgain and controlDone: only stopped to running asks for the runner again', () => {
+  assert(needsRunAgain('stopped', 'running'));
+  assert(!needsRunAgain('paused', 'running'));
+  assert(!needsRunAgain('stopped', 'stopped'));
+  assertEquals(controlDone('limit', 'stopped', 'running'), 'Limit raised: the board is running again.');
+  assertEquals(controlDone('limit', 'running', 'running'), 'Limit saved.');
+  assertEquals(controlDone('limit', 'stopped', 'stopped'), 'Limit saved. The board is stopped.');
+  assert(controlDone('pause', 'running', 'paused').startsWith('Paused'));
+});
+
+Deno.test('amendmentsOf picks the amendments, oldest first', () => {
+  const nodes = [
+    mem('a2', 'amendment', 5),
+    mem('g', 'goal', 0),
+    mem('a1', 'amendment', 1),
+    mem('h', 'hint', 2),
+  ];
+  assertEquals(amendmentsOf(nodes).map((n) => n.id), ['a1', 'a2']);
+});
+
 // ── logbuf ─────────────────────────────────────────────────────────
 
 Deno.test('applyChunk appends forward chunks once and ignores a repeat', () => {
@@ -349,6 +483,24 @@ Deno.test('bandLayout puts the goal at the top centre with rules and progress be
   assertEquals(positions.progress.y, positions.goal.y);
   assertEquals([positions.rules.x, positions.progress.x], [COL_W, -COL_W]);
   assertEquals(bands.map((b) => b.label), ['Goal']);
+});
+
+Deno.test('bandLayout puts amendments in the header row beside the goal, never in a side lane', () => {
+  const g = board(
+    [
+      ...header(),
+      mem('am1', 'amendment', 0.5),
+      mem('i1', 'intent', 1, { tags: ['round:1'] }),
+      mem('am2', 'amendment', 3),
+    ],
+    [...headerLinks(), link('am1', 'goal', 'depends-on'), link('am2', 'goal', 'depends-on')],
+  );
+  const { positions: p, bands } = bandLayout(g);
+  assertEquals([p.am1.y, p.am2.y], [p.goal.y, p.goal.y]);
+  // Beside the goal, oldest first, alternating right then left after rules and progress.
+  assertEquals([p.rules.x, p.progress.x, p.am1.x, p.am2.x], [COL_W, -COL_W, 2 * COL_W, -2 * COL_W]);
+  assertEquals(bands.map((b) => b.label), ['Goal', 'Round 1']);
+  assert(p.i1.y > p.goal.y);
 });
 
 Deno.test('bandLayout gives two tagged rounds two bands in order, intents on each band row', () => {

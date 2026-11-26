@@ -249,6 +249,14 @@ export class PgMemoryStore implements MemoryStore {
     });
   }
 
+  /** The caller's own display name, read as the member. */
+  async memberName(): Promise<string> {
+    return await this.run(async (tx) => {
+      const [r] = await tx<Row[]>`select agent_memory.member_name(agent_memory.current_member_id()) as name`;
+      return (r?.name as string | null) ?? 'the person';
+    });
+  }
+
   async store(scope: string, r: StoreRequest, s?: SessionRef): Promise<Memory> {
     return (await this.storeBatch(scope, [r], s))[0];
   }

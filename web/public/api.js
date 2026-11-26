@@ -1,4 +1,4 @@
-// Fetches JSON from the local server's /api proxy. Every failure becomes an ApiError.
+// Fetches and posts JSON through the local server's /api proxy. Every failure becomes an ApiError.
 
 export class ApiError extends Error {
   /**
@@ -15,6 +15,9 @@ export class ApiError extends Error {
 /** How long a request may take before it fails like a network error. The server gives up on web-api at 15 s. */
 export const REQUEST_TIMEOUT_MS = 20000;
 
+/** A write waits longer: the server gives up on web-api at 30 s for a POST. */
+export const POST_TIMEOUT_MS = 35000;
+
 /**
  * GET `/api<path>` and parse the JSON body. A non-2xx status throws `ApiError` with the body's `error` text. A request
  * with no answer after `REQUEST_TIMEOUT_MS`, or aborted through `signal`, throws an `ApiError` with status 0.
@@ -22,8 +25,40 @@ export const REQUEST_TIMEOUT_MS = 20000;
  * @param {AbortSignal} [signal] aborts the request, for a caller that has moved on
  * @returns {Promise<unknown>}
  */
-export async function getJson(path, signal) {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+export function getJson(path, signal) {
+  return request(path, { headers: { accept: 'application/json' } }, REQUEST_TIMEOUT_MS, signal);
+}
+
+/**
+ * POST `body` as JSON to `/api<path>` and parse the JSON answer, failing as `getJson` does, after `POST_TIMEOUT_MS`.
+ * The page's own origin makes the browser send `Sec-Fetch-Site: same-origin`, which the local server requires.
+ * @param {string} path starts with `/`
+ * @param {unknown} body
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<unknown>}
+ */
+export function postJson(path, body, signal) {
+  return request(
+    path,
+    {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    POST_TIMEOUT_MS,
+    signal,
+  );
+}
+
+/**
+ * @param {string} path
+ * @param {RequestInit} init
+ * @param {number} timeoutMs
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<unknown>}
+ */
+async function request(path, init, timeoutMs, signal) {
+  const timeout = AbortSignal.timeout(timeoutMs);
   const both = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const failed = () =>
     new ApiError(
@@ -36,7 +71,7 @@ export async function getJson(path, signal) {
     );
   let res;
   try {
-    res = await fetch(`/api${path}`, { headers: { accept: 'application/json' }, signal: both });
+    res = await fetch(`/api${path}`, { ...init, signal: both });
   } catch {
     throw failed();
   }

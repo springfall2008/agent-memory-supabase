@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from '@std/assert';
 import { type Config, loadConfig } from '../../web/lib/config.ts';
 import { hostAllowed } from '../../web/lib/guard.ts';
-import { proxyApi, UPSTREAM_TIMEOUT_MS } from '../../web/lib/proxy.ts';
+import { POST_TIMEOUT_MS, proxyApi, UPSTREAM_TIMEOUT_MS } from '../../web/lib/proxy.ts';
 import { serveStatic } from '../../web/lib/static.ts';
 import { handle } from '../../web/server.ts';
 
@@ -304,6 +304,211 @@ Deno.test('proxyApi refuses cross-site requests but allows same-origin, same-sit
   assertEquals(calls.length, 4);
 });
 
+const SAME = { 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' };
+
+function post(path: string, body: BodyInit | null, headers: Record<string, string> = SAME): Request {
+  return new Request(`http://localhost:8787/api/${path}`, { method: 'POST', headers, body });
+}
+
+Deno.test('proxyApi forwards a same-origin JSON POST to each write route, byte for byte, with the token', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const body = '{"text":"héllo ☃ 😀"}';
+  for (const path of ['hints', 'intents', 'amendments', 'boards/control']) {
+    const res = await proxyApi(post(path, body, { ...SAME, authorization: 'Bearer browser', cookie: 'a=b' }), CFG, fn);
+    assertEquals(res.status, 200, path);
+    assertEquals(await res.json(), { ok: true });
+  }
+  assertEquals(
+    calls.map((c) => c.url),
+    ['hints', 'intents', 'amendments', 'boards/control'].map((p) => `${CFG.apiUrl}/${p}`),
+  );
+  for (const c of calls) {
+    assertEquals(c.init?.method, 'POST');
+    assertEquals(c.init?.redirect, 'manual');
+    const headers = new Headers(c.init?.headers);
+    assertEquals(headers.get('authorization'), `Bearer ${SECRET}`);
+    assertEquals(headers.get('content-type'), 'application/json');
+    assertEquals(headers.get('cookie'), null);
+    assertEquals(new TextDecoder().decode(c.init?.body as Uint8Array), body);
+  }
+});
+
+Deno.test('proxyApi accepts a JSON content type with parameters in any case, and an Origin equal to its own', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  for (const type of ['application/json; charset=utf-8', 'Application/JSON', 'APPLICATION/JSON;charset=UTF-8']) {
+    const res = await proxyApi(post('hints', '{}', { 'sec-fetch-site': 'same-origin', 'content-type': type }), CFG, fn);
+    assertEquals(res.status, 200, type);
+    await res.body?.cancel();
+  }
+  const origin = await proxyApi(
+    post('hints', '{}', { origin: 'http://localhost:8787', 'content-type': 'application/json' }),
+    CFG,
+    fn,
+  );
+  assertEquals(origin.status, 200);
+  await origin.body?.cancel();
+  assertEquals(calls.length, 4);
+  assertEquals(new Headers(calls[0].init?.headers).get('content-type'), 'application/json');
+});
+
+Deno.test('proxyApi refuses a POST without header proof of same-origin, without calling upstream', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const json = { 'content-type': 'application/json' };
+  const cases: Record<string, Record<string, string>> = {
+    'cross-site': { ...json, 'sec-fetch-site': 'cross-site' },
+    'same-site': { ...json, 'sec-fetch-site': 'same-site' },
+    'none': { ...json, 'sec-fetch-site': 'none' },
+    'foreign origin': { ...json, origin: 'https://evil.example' },
+    'other port origin': { ...json, origin: 'http://localhost:9999' },
+    'null origin': { ...json, origin: 'null' },
+    'neither header': json,
+    'cross-site with a matching origin': { ...json, 'sec-fetch-site': 'cross-site', origin: 'http://localhost:8787' },
+  };
+  for (const [name, headers] of Object.entries(cases)) {
+    const res = await proxyApi(post('hints', '{}', headers), CFG, fn);
+    assertEquals(res.status, 403, name);
+    assertEquals(await res.json(), { error: 'cross-site request refused' }, name);
+  }
+  assertEquals(calls.length, 0);
+});
+
+Deno.test('proxyApi refuses a POST that is not JSON with 415', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const types: (string | null)[] = [
+    'text/plain',
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+    'application/jsonp',
+    'text/json',
+    null,
+  ];
+  for (const type of types) {
+    const headers: Record<string, string> = { 'sec-fetch-site': 'same-origin' };
+    if (type !== null) headers['content-type'] = type;
+    const res = await proxyApi(post('intents', '{}', headers), CFG, fn);
+    assertEquals(res.status, 415, String(type));
+    await res.body?.cancel();
+  }
+  assertEquals(calls.length, 0);
+});
+
+Deno.test('proxyApi caps a POST body at 16 KiB, however it is declared', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const cap = 16 * 1024;
+  const ok = await proxyApi(post('hints', 'x'.repeat(cap)), CFG, fn);
+  assertEquals(ok.status, 200);
+  await ok.body?.cancel();
+  assertEquals(calls.length, 1);
+
+  const over = await proxyApi(post('hints', 'x'.repeat(cap + 1)), CFG, fn);
+  assertEquals(over.status, 413);
+  assertEquals(await over.json(), { error: 'request too large' });
+
+  // A lying Content-Length: a streamed body with none, which is read only until it passes the cap.
+  let pulled = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 4096;
+      controller.enqueue(new Uint8Array(4096));
+      if (pulled > 1024 * 1024) controller.close();
+    },
+  });
+  const streamed = new Request('http://localhost:8787/api/hints', {
+    method: 'POST',
+    headers: SAME,
+    body: stream,
+    // @ts-ignore duplex is required for a streamed request body
+    duplex: 'half',
+  });
+  const res = await proxyApi(streamed, CFG, fn);
+  assertEquals(res.status, 413);
+  await res.body?.cancel();
+  assert(pulled < 1024 * 1024, `read ${pulled} bytes`);
+  assertEquals(calls.length, 1);
+
+  // A declared length over the cap is refused whatever the body.
+  const declared = await proxyApi(
+    post('hints', '{}', { ...SAME, 'content-length': String(cap + 1) }),
+    CFG,
+    fn,
+  );
+  assertEquals(declared.status, 413);
+  await declared.body?.cancel();
+  assertEquals(calls.length, 1);
+});
+
+Deno.test('proxyApi 405s a POST to a read route and a GET to a write route, without calling upstream', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  for (const path of ['scopes', 'boards', 'graph', 'memories', 'memories/3f2a']) {
+    const res = await proxyApi(post(path, '{}'), CFG, fn);
+    assertEquals(res.status, 405, `POST ${path}`);
+    assertEquals(res.headers.get('allow'), 'GET', path);
+    await res.body?.cancel();
+  }
+  for (const path of ['hints', 'intents', 'amendments', 'boards/control']) {
+    const res = await proxyApi(new Request(`http://localhost:8787/api/${path}`), CFG, fn);
+    assertEquals(res.status, 405, `GET ${path}`);
+    assertEquals(res.headers.get('allow'), 'POST', path);
+    await res.body?.cancel();
+  }
+  for (const method of ['PUT', 'DELETE', 'PATCH']) {
+    const res = await proxyApi(
+      new Request('http://localhost:8787/api/hints', { method, body: '{}', headers: SAME }),
+      CFG,
+      fn,
+    );
+    assertEquals(res.status, 405, method);
+    await res.body?.cancel();
+  }
+  const other = await proxyApi(post('other', '{}'), CFG, fn);
+  assertEquals(other.status, 405);
+  await other.body?.cancel();
+  assertEquals(calls.length, 0);
+});
+
+Deno.test('proxyApi gives a POST a 30 second upstream timeout and a GET 15, and reports a hung POST as 502', async () => {
+  assertEquals(POST_TIMEOUT_MS, 30_000);
+  const original = AbortSignal.timeout;
+  const asked: number[] = [];
+  AbortSignal.timeout = (ms: number) => {
+    asked.push(ms);
+    return original.call(AbortSignal, ms);
+  };
+  try {
+    const { fn } = fakeFetch(jsonOk);
+    const p = await proxyApi(post('hints', '{}'), CFG, fn);
+    await p.body?.cancel();
+    const g = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
+    await g.body?.cancel();
+  } finally {
+    AbortSignal.timeout = original;
+  }
+  assertEquals(asked, [30_000, 15_000]);
+
+  const hung = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+    })) as typeof fetch;
+  const res = await proxyApi(post('hints', '{}'), CFG, hung, 20);
+  assertEquals(res.status, 502);
+  assertEquals(await res.json(), { error: 'web-api unreachable' });
+});
+
+Deno.test('proxyApi passes a POST upstream error through, and a thrown POST fetch is 502 without the token', async () => {
+  const { fn } = fakeFetch(() => Response.json({ error: 'not found' }, { status: 404 }));
+  const res = await proxyApi(post('hints', '{}'), CFG, fn);
+  assertEquals(res.status, 404);
+  assertEquals(await res.json(), { error: 'not found' });
+
+  const boom = fakeFetch(() => {
+    throw new Error(`failed ${SECRET}`);
+  });
+  const bad = await proxyApi(post('hints', '{}'), CFG, boom.fn);
+  assertEquals(bad.status, 502);
+  const text = await bad.text();
+  assert(!text.includes(SECRET));
+});
+
 Deno.test('proxyApi passes an upstream error status and body through', async () => {
   const { fn } = fakeFetch(() => Response.json({ error: 'invalid or missing token' }, { status: 401 }));
   const res = await proxyApi(new Request('http://localhost:8787/api/scopes'), CFG, fn);
@@ -449,6 +654,24 @@ Deno.test('handle refuses a non-GET method on /logs and on static paths with 405
     assertEquals(api.status, 405);
     await api.body?.cancel();
     assertEquals(calls.length, 0);
+  });
+});
+
+Deno.test('handle sends a same-origin JSON POST on /api to the proxy', async () => {
+  await withServer(async (deps, calls) => {
+    const res = await handle(
+      new Request('http://localhost:8787/api/hints', {
+        method: 'POST',
+        headers: { ...LOCAL, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' },
+        body: '{"a":1}',
+      }),
+      deps,
+    );
+    assertEquals(res.status, 200);
+    assertEquals(res.headers.get('cache-control'), 'no-store');
+    await res.body?.cancel();
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].init?.method, 'POST');
   });
 });
 
