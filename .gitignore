@@ -12,3 +12,5 @@ ids*.txt
 
 # Python (runner/)
 __pycache__/
+
+.superpowers/
