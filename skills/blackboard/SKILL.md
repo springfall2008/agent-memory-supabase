@@ -69,7 +69,7 @@ session label fails.
 | `kind:goal`       | one         | `state:running`, `state:done` or `state:stopped`                 | none                                                       |
 | `kind:rules`      | one         | none                                                             | `depends-on` the goal                                      |
 | `kind:progress`   | one         | none                                                             | `depends-on` the goal                                      |
-| `kind:intent`     | many        | `state:open`, `state:done` or `state:dropped`                    | `derived-from` each fact or hint that prompted it          |
+| `kind:intent`     | many        | `state:open`, `state:done` or `state:dropped`; `round:<n>`       | `derived-from` each fact or hint that prompted it          |
 | `kind:fact`       | many        | `verdict:confirmed`, `verdict:refuted` or `verdict:inconclusive` | `derived-from` its intent; `supersedes` a fact it corrects |
 | `kind:hint`       | many        | none                                                             | `relates-to` the intent or fact it is about, if any        |
 | `kind:conclusion` | at most one | none                                                             | `derived-from` each fact that proves it                    |

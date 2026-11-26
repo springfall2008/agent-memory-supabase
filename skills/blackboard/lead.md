@@ -148,7 +148,8 @@ Produce: <what the fact must report for this to count as answered>
 Give up when: <the point at which the worker records an inconclusive fact instead>
 ```
 
-Tags: `board:<project>`, `kind:intent`, `state:open`, `evergreen`.
+Tags: `board:<project>`, `kind:intent`, `state:open`, `round:<n>`, `evergreen`, where `<n>` is the round number step 6
+writes in the progress memory's `Round:` line.
 
 ## Progress template
 
