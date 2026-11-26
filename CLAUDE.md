@@ -114,6 +114,25 @@ board from a TOML board file. Design: `docs/superpowers/specs/2026-11-24-board-r
   fake clock. `cli.py` is the I/O loop around it.
 - **Tests:** change the scheduler test-first. Test runner-mode skill changes with subagents on toy boards, as above.
 
+**Web UI.** `web/` is a local, read-only app started with `deno task web`: a Deno server (`web/server.ts`, helpers in
+`web/lib/`) and a plain ES-module browser app with vendored Cytoscape (`web/public/`, no build step). Design:
+`docs/superpowers/specs/2026-11-26-web-ui-design.md`.
+
+- **Data:** the server talks only to the `web-api` Edge Function (`supabase/functions/web-api/index.ts`, routes in
+  `_shared/web-api.ts`), never to Postgres. It adds the token from `.env` and forwards only an allow-list of GET routes
+  (`/api/scopes`, `boards`, `graph`, `memories`, `memories/:id`), so the token never reaches the browser. It binds to
+  `127.0.0.1` and checks `Host`.
+- **web-api:** read-only routes on `PgMemoryStore` as the caller, with the embedder built lazily so only text search
+  loads it. Browse and ranked search from here do not count as an access. There is no history route.
+- **Worker logs:** `/logs/<board>/<label>` reads the runner's `workers/<slot>-<label>.jsonl` from `~/.board-runner` (or
+  `$BOARD_RUNNER_HOME`). The label is untrusted text from a `By:` line, so it must match the shape `new_label` makes,
+  and the real path must stay inside that board's `workers/`. The server picks the byte offsets, so the browser never
+  splits a UTF-8 sequence.
+- **Live:** the browser polls `/graph` every `POLL_MS` (3 s) while the tab is visible and diffs each result. Hosted
+  `/graph` takes about 0.3 s whatever the board's size, mostly network and auth.
+- **Tests:** pure helpers are split from DOM modules so they run under `deno task test:unit`. `deno task check`
+  type-checks `web/lib` and `web/server.ts`. The browser modules are checked by hand against a toy board.
+
 **CPU budget.** Edge Function CPU is counted per worker, so a request should stay under about 1 s. Embedding is
 sequential, `store_batch` is capped at 2 memories, and `recall` embeds at most 5 topics. Limits are in
 `_shared/limits.ts`. A 546 means the platform recycled a busy worker: retry once.

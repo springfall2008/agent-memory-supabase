@@ -1,6 +1,6 @@
 # Web UI: design
 
-Status: design, 2026-11-26. Not yet planned or built.
+Status: implemented, 2026-11-26. See "Builder's calls" at the end for what was decided while building.
 
 ## Intent
 
@@ -247,3 +247,40 @@ being worked on can be tied to its worker's log. *(Added after the plan review.)
 - Graph layout (for example cytoscape with a dagre layout, or force-directed) and styling.
 - How `web/` reads the function URL and token (names of the environment variables), and how `deno task web` is wired.
 - Where the `Intent:` and `Fact for intent` parsing lives, and its tests.
+
+## Builder's calls
+
+What was decided while building, beyond or against the text above.
+
+- **Env keys:** `AGENT_MEMORY_TOKEN`, then `WEB_API_URL`, or else `AGENT_MEMORY_URL` with `agent-memory` swapped for
+  `web-api`; `WEB_PORT` (default 8787); `BOARD_RUNNER_HOME`. `deno task web` loads `.env`.
+- **Routes:** `/scopes`, `/boards`, `/graph`, `/memories` and `/memories/:id` on `web-api`; the local server forwards
+  only that allow-list. The log route is `/logs/<board>/<label>` with `from`, `tail` or `before` byte-offset queries,
+  and the server chooses the offsets so a response never ends inside a UTF-8 sequence.
+- **Hosted timing, measured on the deployed function.** The largest board the member could read (68 nodes, 98 edges,
+  37 KB): run 1 p50 321 ms, p95 597 ms, cold 446 ms; run 2 p50 307 ms, p95 404 ms. A 9-node board: p50 288 ms, p95
+  526 ms. Wall time is dominated by network and authentication, not graph size. Locally, a 400-node board (196 KB)
+  took p50 82 ms, p95 94 ms. `POLL_MS` stays at 3000, so no fingerprint route was needed.
+- **Layout:** the first plan was cytoscape's breadthfirst layout. It spread nodes over the viewport and tangled after a
+  few rounds, and a dagre layout was tried and dropped. The final layout puts **rounds in rows**: each round is a
+  horizontal band, its intents in a row, and each intent's results directly beneath it. Faint "Round n" separators
+  mark the bands. The lead now tags each intent `round:<n>`. An older board without the tag is grouped as "Batch n"
+  by gaps of two minutes in creation time. Dashed lines join the goal to intents that link to nothing, since the first
+  round of intents has no link to the goal. Switching boards resets pan and zoom and closes the drawer.
+- **Drawer context:** an intent shows a "Starting point" (the facts it builds on and the latest measurement before it),
+  a fact shows its result first, and the goal shows the progress fields and the latest measurement. Progress history is
+  not stored, so "measured before" is rebuilt from fact timestamps and may differ from the progress memory's
+  `Best result:` at that time.
+- **Worker log tab:** shown for a fact with a `By:` line, and for an intent through its claim description label
+  `(label: <label>)` or, once done, through its fact. It trims a trailing partial line while a worker runs, and a
+  symlink out of the folder reads the same as an absent file, so the route cannot be used to test whether a path exists.
+  An empty buffer takes the first chunk at any offset, because a tail read starts partway into the file.
+- **Runner:** workers use `stream-json`; finished workers leave `state.json`; the newest 200 transcripts per board are
+  kept. A first run in a new workspace folder waits at Claude Code's folder-trust dialog until the person accepts it
+  in the lead's tmux session.
+- **Skill:** facts end with `By: <label>`, worker claims carry `(label: <label>)`, intents carry `round:<n>`.
+- **Verified by:** unit and integration tests for every route and the local server; a hosted run of a toy board with two
+  Haiku workers and a Sonnet lead, with the Board tab open. Intents appeared, claims showed a ring with the worker's
+  label, a fact landed and flashed, a worker's transcript followed live past non-ASCII text, a done intent's log was
+  found through its fact, and after the board finished the conclusion appeared and the logs stopped polling.
+- **Left for later:** the History tab, writing, hosting with a login, and a live event feed, as listed under "Later".
