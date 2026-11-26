@@ -41,7 +41,8 @@ you read with the Read tool. The file is the person's approval: ask nothing.
    - Take `max_open_intents` (default 4), `claim_minutes` (default 60) and `max_intents` (default none).
    - `Measure` is `yes` when the file has a `[measure]` table, otherwise `no`.
    - `Ideas model` is the `[lead]` table's `ideas_model` (default `inherit`).
-2. **Look for the board.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]`, full detail.
+2. **Look for the board.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]`, full detail. A `state:paused`
+   goal counts as `state:running` in step 4.
 3. **No goal:** write the board as in step 4 above.
    - The goal follows the goal template, with `Goal:` from `goal`, `Done when:` from `done_when`, and the numbers from
      the file. `Started:` is today's date, `by board file <file name, without its directory>`.

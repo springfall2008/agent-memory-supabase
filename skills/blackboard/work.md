@@ -5,10 +5,12 @@ conversation, for every claim call.
 
 1. **Read the goal and rules.**
    - Call `graph` with `tags_all ["board:<project>", "kind:goal"]` and `detail "full"`, then the same with `kind:rules`.
-   - If there is no goal, or its state is not `state:running`, say the board is not running and **end the loop**.
+   - If there is no goal, or its state is neither `state:running` nor `state:paused`, say the board is not running and
+     **end the loop**. A pause holds only the lead still: workers carry on, so for them `state:paused` counts as
+     running.
    - Note the goal's scope and its `Claim minutes`.
-2. **Take an intent,** in a separate call made after you have read step 1's result and seen `state:running`. Call
-   `claim_next` with:
+2. **Take an intent,** in a separate call made after you have read step 1's result and seen `state:running` or
+   `state:paused`. Call `claim_next` with:
    - `tags_all ["board:<project>", "kind:intent", "state:open"]`;
    - `minutes`: the goal's claim minutes;
    - `session_label`: your label;

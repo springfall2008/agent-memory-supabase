@@ -7,10 +7,11 @@ label from SKILL.md, made once in this conversation, for every claim call.
    before reading means anything written during the round is read next round.
 2. **Read the goal.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]` and `detail "full"`.
    - If there is no goal, say so and **end the loop**.
-   - If its state is not `state:running`, release your lead claim on it (`release_claim` with your `session_label`, if
-     you hold one), say the board is no longer running, and **end the loop**.
-3. **Take or renew the lead role,** in a separate call made after you have read step 2's result and seen
-   `state:running`. Call `claim_memory` on the goal with:
+   - If its state is `state:paused`, carry on: it is a running board whose lead is held still.
+   - If its state is neither `state:running` nor `state:paused`, release your lead claim on it (`release_claim` with
+     your `session_label`, if you hold one), say the board is no longer running, and **end the loop**.
+3. **Take or renew the lead role,** in a separate call made after you have read step 2's result and seen `state:running`
+   or `state:paused`. Call `claim_memory` on the goal with:
    - `minutes 30`;
    - `session_label`: your lead label;
    - `description`: `Lead of board <project>`;
@@ -18,6 +19,9 @@ label from SKILL.md, made once in this conversation, for every claim call.
 
    If it is refused, report who holds the lead and until when, write nothing, and **end the loop**. Two leads never run.
    Each round renews the 30 minutes, so pace a `/loop` at under 30 minutes between rounds.
+
+   If the goal is `state:paused`, read only the intents (step 4's first bullet, with its `truncated: true` rule), then
+   go to "When the board is paused" below. Skip steps 5 to 9.
 4. **Read the board.**
    - Call `graph` with `tags_all ["board:<project>", "kind:intent"]`, short detail. This gives every intent, with its
      state and any active `claim`. If the result says `truncated: true`, the board has outgrown one read: tell the
@@ -35,7 +39,7 @@ label from SKILL.md, made once in this conversation, for every claim call.
         `derived-from` each fact that proves it. If the board already has a conclusion, from a stop at the intent limit,
         link the new one `supersedes` it.
      2. Swap the goal's `state:running` for `state:done`, keeping its other tags.
-     3. Swap `state:open` for `state:dropped` on every open intent.
+     3. Swap `state:open` for `state:dropped` on every open intent, a person's included.
      4. Rewrite progress (step 6), release your claim on the goal, and **end the loop**.
    - **Unreachable.** The facts show the goal cannot be met. Do the same as Done, but the conclusion says why it cannot
      be met, and the goal becomes `state:stopped`. If the only reason is that the ideas have run out, do Stuck for ideas
@@ -44,8 +48,11 @@ label from SKILL.md, made once in this conversation, for every claim call.
      `verdict:` tag, and link it `supersedes` the wrong one.
    - **Drop.** An open intent that nobody holds a claim on has become pointless. Swap its `state:open` for
      `state:dropped`.
+     - Never drop as pointless an open intent whose `Why:` line starts `Why: added by`. A person wrote it, so only a
+       person or a finished worker closes it.
      - An intent with two or more `Worker timed out` hints `relates-to` it is too big for one worker. Drop it, and in
-       Plan write smaller intents that cover it, if the intent limit allows.
+       Plan write smaller intents that cover it, if the intent limit allows. This holds for a person's intent too: link
+       each smaller intent `derived-from` it.
    - **Intent limit.** If the goal has a `Max intents` number, count every intent on the board, in any state. Plan
      writes no intent that would take the count past the limit.
      - Done comes first: if the facts meet Done when, do Done (or, with `measure`, propose the candidate) even at the
@@ -58,7 +65,7 @@ label from SKILL.md, made once in this conversation, for every claim call.
      - If the board already has a conclusion from an earlier stop, link the new one `supersedes` it.
    - **Plan.** Count the open intents, claimed or not. Write new intents until that count reaches the goal's
      `Max open intents`. Each new intent must:
-     - not overlap any open intent, or any done intent whose fact already answers it;
+     - not overlap any open intent (a person's included), or any done intent whose fact already answers it;
      - cite the one to three facts or hints that most directly prompted it, linked `derived-from` each (round 1 has
        none). Background everyone already knows belongs in the progress memory, not in links;
      - follow the intent template below, describing only the task. How to use the board is in this skill, not in
@@ -98,6 +105,21 @@ label from SKILL.md, made once in this conversation, for every claim call.
    - **Some free:** about 15 minutes.
    - Never more than 25 minutes, so your 30-minute claim on the goal does not lapse between rounds.
 
+## When the board is paused
+
+A person paused the board, for example from the web UI, to add intents or hints without the lead planning around them.
+The lead keeps the board alive and writes nothing.
+
+- You have renewed the lead claim (step 3) and read the intents (step 4). Count `free` and `open` from them.
+- Write nothing: no intents, no candidates, no conclusion and no progress rewrite. Do not do Done, Unreachable, the
+  intent limit, Drop, Plan or Stuck for ideas, and do no intent yourself (step 7). Read no facts or hints.
+- Keep your claim on the goal.
+- End the round by saying in one line that the board is paused, with `<free>` of `<open>` open intents free, then
+  `(label: <your lead label>)`.
+- Interactive mode: pace the next round like step 9's "None free", about 5 minutes, so the lead notices `resume-lead`
+  soon. In runner mode the runner decides.
+- Runner mode: the very last line is `BOARD-LEAD paused free=<n> open=<m>`.
+
 ## In runner mode
 
 When the command includes `runner`, a board runner sends each round and starts the workers.
@@ -109,6 +131,7 @@ When the command includes `runner`, a board runner sends each round and starts t
   - step 2, the goal missing or not running: `BOARD-LEAD stopped`;
   - step 3, refused: `BOARD-LEAD refused <holder's session label> <until>`;
   - step 4, truncated: `BOARD-LEAD outgrown`;
+  - step 3, the goal is paused: `BOARD-LEAD paused free=<n> open=<m>`;
   - step 5, Done: `BOARD-LEAD done`; Unreachable, or stopped at the intent limit: `BOARD-LEAD stopped`;
   - with `measure`, a candidate (below): `BOARD-LEAD candidate <ref> free=<n> open=<n>`;
   - otherwise: `BOARD-LEAD running free=<n> open=<n>`.
@@ -148,6 +171,9 @@ Why: <the fact or hint ids that prompted it and what they showed; "first round" 
 Produce: <what the fact must report for this to count as answered>
 Give up when: <the point at which the worker records an inconclusive fact instead>
 ```
+
+A person's intent, added by the `intent` command or the web UI, has the same shape, with a `Why:` line that starts
+`Why: added by`.
 
 Tags: `board:<project>`, `kind:intent`, `state:open`, `round:<n>`, `evergreen`. `<n>` is this round's number: one more
 than the progress memory's `Round:` when the round began. Start writes `Round: 0`, so the first planned round is 1. Step
