@@ -37,6 +37,7 @@ exclusive = true
 [lead]
 model = "opus"
 round_every_minutes = 20
+ideas_model = "fable"
 
 [[worker]]
 model = "opus"
@@ -92,6 +93,7 @@ class BoardFileTest(unittest.TestCase):
         self.assertEqual(bf.measure, Measure("./tools/board-measure.sh", 0, 30, True))
         self.assertEqual(bf.lead_model, "opus")
         self.assertEqual(bf.round_every_minutes, 20)
+        self.assertEqual(bf.ideas_model, "fable")
         self.assertEqual(
             bf.workers,
             (WorkerSlot("opus", 120), WorkerSlot("sonnet", 180), WorkerSlot("ollama:glm-5.3", 180)),
@@ -110,6 +112,7 @@ class BoardFileTest(unittest.TestCase):
         self.assertIsNone(bf.measure)
         self.assertEqual(bf.lead_model, "opus")
         self.assertEqual(bf.round_every_minutes, 20)
+        self.assertEqual(bf.ideas_model, "inherit")
         self.assertEqual(bf.worker_timeout_minutes, 120)
         self.assertEqual(bf.workers, (WorkerSlot("haiku", 120),))
         self.assertEqual(bf.allow, ())
@@ -144,6 +147,7 @@ class BoardFileTest(unittest.TestCase):
         self.assertRejects(self.minimal(replace=('model = "haiku"', 'model = ""')), "model")
         self.assertRejects(self.minimal(replace=('[[worker]]\nmodel = "haiku"', "")), "worker")
         self.assertRejects(self.minimal("\n[lead]\nround_every_minutes = 30\n"), "round_every_minutes")
+        self.assertRejects(self.minimal('\n[lead]\nideas_model = ""\n'), "ideas_model")
         self.assertRejects(self.minimal(replace=('"toy-board"', '"Bad_Name"')), "board")
         self.assertRejects(self.minimal(replace=('"{workspace}"', f'"{self.dir}/missing"')), "workspace")
         self.assertRejects(self.minimal(replace=('board = "toy-board"', 'board = "toy-board"\nclaim_minutes = 0')), "claim_minutes")

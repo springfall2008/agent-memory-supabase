@@ -33,6 +33,7 @@ def board(**overrides) -> BoardFile:
         measure=None,
         lead_model="opus",
         round_every_minutes=20,
+        ideas_model="inherit",
         workers=(WorkerSlot("sonnet", 120),),
         allow=("Edit", "Bash(python3 *)"),
         deny=("Bash(git push*)",),

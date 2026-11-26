@@ -14,6 +14,8 @@ first round writes those.
    - **Max open intents** (default 4) and **claim minutes**, which is how long a worker holds an intent before it is
      treated as abandoned (default 60). Max open intents should be at least the number of workers plus one, so a worker
      that finishes finds the next intent already waiting.
+   - **Ideas model** (default `inherit`): the model of the sub-agent that the lead asks for ideas when it is stuck. Do
+     not ask about it unless the person raises it.
 3. **Draft the rules.** Draft them from their answers and from the workspace in front of you: its README, test and build
    commands, and any scripts that measure what the goal cares about. Use the rules template below, then show the draft
    to the person and ask for changes or approval. Do not write rules the person has not approved.
@@ -38,6 +40,7 @@ you read with the Read tool. The file is the person's approval: ask nothing.
    - Take `scope`, `goal`, `done_when` and `rules`.
    - Take `max_open_intents` (default 4), `claim_minutes` (default 60) and `max_intents` (default none).
    - `Measure` is `yes` when the file has a `[measure]` table, otherwise `no`.
+   - `Ideas model` is the `[lead]` table's `ideas_model` (default `inherit`).
 2. **Look for the board.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]`, full detail.
 3. **No goal:** write the board as in step 4 above.
    - The goal follows the goal template, with `Goal:` from `goal`, `Done when:` from `done_when`, and the numbers from
@@ -63,6 +66,7 @@ Max open intents: <n>
 Max intents: <n, or none>
 Claim minutes: <n>
 Measure: <yes if a measurement must confirm the goal before it is concluded, otherwise no>
+Ideas model: <the model of the sub-agent the lead asks for ideas when stuck: inherit, a model name, or none>
 Started: <ISO date> by <the person>
 ```
 
