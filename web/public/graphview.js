@@ -1,5 +1,6 @@
 // The Cytoscape graph of a board: styling, layout, and applying a diff without re-laying out the whole graph.
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
+import { freeSlot } from './placement.js';
 
 const COLOUR = {
   goal: '#a855f7',
@@ -42,7 +43,7 @@ const STYLE = [
     selector: `node.verdict-${v}`,
     style: { 'background-color': COLOUR[v] },
   })),
-  { selector: 'node.claimed', style: { 'border-width': 4, 'border-color': '#f9fafb', 'border-style': 'double' } },
+  { selector: 'node.claimed', style: { 'border-width': 4, 'border-color': '#fbbf24' } },
   { selector: 'node.superseded', style: { opacity: 0.35 } },
   { selector: 'node.entering', style: { opacity: 0 } },
   {
@@ -70,7 +71,8 @@ const STYLE = [
 
 const FLASH_MS = 1000;
 const ROW_GAP = 90;
-const SLOT_GAP = 80;
+/** At least this much room around a new node for its label, in case the label has not been measured yet. */
+const LABEL_EXTENT = { left: 40, top: 12, right: 40, bottom: 30 };
 
 /**
  * @typedef {import('../../supabase/functions/_shared/types.ts').GraphNode} GraphNode
@@ -186,8 +188,9 @@ export function createGraphView(container, opts) {
   }
 
   /**
-   * Place each new node one row below a placed node it links to (its parent), else any placed neighbour, else under
-   * the whole graph, in the nearest free slot. Nodes come oldest first, so a new intent is placed before its new fact.
+   * Place each new node one level below a placed node it links to (its parent), else any placed neighbour, else under
+   * the whole graph, in the nearest slot clear of other nodes and of edges (`freeSlot`). One level is the gap to the
+   * anchor's placed children, else ROW_GAP. Nodes come oldest first, so a new intent is placed before its new fact.
    * @param {any} added the new nodes
    */
   function place(added) {
@@ -197,24 +200,33 @@ export function createGraphView(container, opts) {
       const parent = node.outgoers('node').filter(placed).first();
       const near = parent.nonempty() ? parent : node.neighborhood('node').filter(placed).first();
       let anchor;
-      if (near.nonempty()) anchor = near.position();
-      else {
+      let rowGap = ROW_GAP;
+      if (near.nonempty()) {
+        anchor = near.position();
+        const below = near.incomers('node').filter(placed).map((/** @type {any} */ c) => c.position().y - anchor.y)
+          .filter((/** @type {number} */ d) => d > 0);
+        if (below.length) rowGap = Math.min(...below);
+      } else {
         const bb = cy.nodes().filter(placed).boundingBox({});
         anchor = Number.isFinite(bb.x1) ? { x: bb.x1, y: bb.y2 } : { x: 0, y: 0 };
       }
-      const taken = cy.nodes().filter(placed).map((/** @type {any} */ n) => n.position());
-      const y = anchor.y + ROW_GAP;
-      let spot = { x: anchor.x, y };
-      for (let k = 0; k < 40; k++) {
-        const x = anchor.x + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * SLOT_GAP;
-        if (
-          !taken.some((/** @type {any} */ p) => Math.abs(p.x - x) < SLOT_GAP / 2 && Math.abs(p.y - y) < ROW_GAP / 2)
-        ) {
-          spot = { x, y };
-          break;
-        }
-      }
-      node.position(spot);
+      const others = cy.nodes().filter(placed);
+      const segments = cy.edges().filter((/** @type {any} */ e) => placed(e.source()) && placed(e.target()))
+        .map((/** @type {any} */ e) => {
+          const a = e.source().position();
+          const b = e.target().position();
+          return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+        });
+      const pos = node.position();
+      const bb = node.boundingBox({});
+      const extent = {
+        left: Math.max(LABEL_EXTENT.left, pos.x - bb.x1),
+        top: Math.max(LABEL_EXTENT.top, pos.y - bb.y1),
+        right: Math.max(LABEL_EXTENT.right, bb.x2 - pos.x),
+        bottom: Math.max(LABEL_EXTENT.bottom, bb.y2 - pos.y),
+      };
+      const boxes = others.map((/** @type {any} */ n) => n.boundingBox({}));
+      node.position(freeSlot(anchor, { boxes, segments, extent, radius: node.width() / 2 }, { rowGap }));
       pending.delete(node.id());
     });
   }

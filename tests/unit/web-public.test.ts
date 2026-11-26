@@ -6,6 +6,7 @@ import { nextDelay, POLL_MS } from '../../web/public/poll.js';
 import { parseStatus } from '../../web/public/status.js';
 import { applyChunk, emptyLog } from '../../web/public/logbuf.js';
 import { boardHash, parseHash, tagHash } from '../../web/public/route.js';
+import { distanceToSegment, freeSlot } from '../../web/public/placement.js';
 
 // ── names ──────────────────────────────────────────────────────────
 
@@ -261,4 +262,52 @@ Deno.test('parseHash falls back to browse for malformed routes', () => {
 Deno.test('boardHash and tagHash round-trip through parseHash, slashes included', () => {
   assertEquals(parseHash(boardHash('a/b', 'x y')), { tab: 'board', scope: 'a/b', board: 'x y' });
   assertEquals(parseHash(tagHash('board:a/b#c')), { tab: 'board', tag: 'board:a/b#c' });
+});
+
+// ── placement ──────────────────────────────────────────────────────
+
+const EXTENT = { left: 20, top: 12, right: 20, bottom: 30 };
+const box = (x: number, y: number) => ({ x1: x - 20, y1: y - 12, x2: x + 20, y2: y + 30 });
+
+Deno.test('distanceToSegment measures to the nearest point, ends included', () => {
+  const s = { x1: 0, y1: 0, x2: 0, y2: 100 };
+  assertEquals(distanceToSegment({ x: 5, y: 50 }, s), 5);
+  assertEquals(distanceToSegment({ x: 0, y: 130 }, s), 30);
+  assertEquals(distanceToSegment({ x: 3, y: 4 }, { x1: 0, y1: 0, x2: 0, y2: 0 }), 5);
+});
+
+Deno.test('freeSlot goes straight below the anchor when nothing is there', () => {
+  const scene = { boxes: [box(0, 0)], segments: [], extent: EXTENT, radius: 11 };
+  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90 }), { x: 0, y: 90 });
+});
+
+Deno.test('freeSlot moves sideways off an edge that runs down from the anchor', () => {
+  // The anchor's existing child sits two levels down, so its edge passes through the spot one level below.
+  const scene = {
+    boxes: [box(0, 0), box(0, 180)],
+    segments: [{ x1: 0, y1: 180, x2: 0, y2: 0 }],
+    extent: EXTENT,
+    radius: 11,
+  };
+  const spot = freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40 });
+  assertEquals(spot, { x: 40, y: 90 });
+  assert(distanceToSegment(spot, scene.segments[0]) >= 11 + 14);
+});
+
+Deno.test('freeSlot skips slots whose box overlaps a node, trying +step then -step outwards', () => {
+  const scene = { boxes: [box(0, 90), box(40, 90)], segments: [], extent: EXTENT, radius: 11 };
+  // 0 and +40 overlap; -40 overlaps the node at 0 (boxes 40 wide, margin 6); +80 overlaps +40; -80 is clear.
+  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40 }), { x: -80, y: 90 });
+});
+
+Deno.test('freeSlot drops a row when the first row is full, and is deterministic', () => {
+  const scene = {
+    boxes: [{ x1: -1000, y1: 70, x2: 1000, y2: 110 }],
+    segments: [],
+    extent: EXTENT,
+    radius: 11,
+  };
+  const a = freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40, maxSteps: 10 });
+  assertEquals(a, { x: 0, y: 180 });
+  assertEquals(freeSlot({ x: 0, y: 0 }, scene, { rowGap: 90, step: 40, maxSteps: 10 }), a);
 });
