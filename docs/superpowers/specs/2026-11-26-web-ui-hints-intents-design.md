@@ -1,6 +1,8 @@
 # Web UI: hints, intents and run controls — design
 
-Status: approved in conversation, 2026-11-26. Builds on `2026-11-26-web-ui-design.md` (the read-only web UI).
+Status: implemented on branch `feat/web-ui-writes`, 2026-11-26. `web-api` is deployed to hosted. The skill's paused
+branch, the amendment fallback and the `round:<n>` wording have **not** been run on a real board: the person chose to
+skip the hosted toy-board run, so that check is still open. Approved in conversation, 2026-11-26. Builds on `2026-11-26-web-ui-design.md` (the read-only web UI).
 
 ## Intent
 
@@ -196,3 +198,31 @@ reach, 15% is acceptable, as long as X is unchanged". The original goal stays in
 - How to get the caller's member name (see above).
 - Exact error wording beyond the ones named.
 - Form layout and styling in the drawer.
+
+## Builder's calls
+
+Decisions made while building, where this design was silent or the plan contradicted it:
+
+- **Stop from paused:** the spec's transition table wins over the plan's "stop unchanged": `stop` is allowed from
+  `running` and `paused`.
+- **Missing goal:** a board with no readable goal is a 404 reading `Board <board> not found`, the same whether it is
+  absent or unreadable.
+- **Amendments** were added after Task 3, with their server and skill parts first, the proxy allow-list in the proxy
+  task and the browser parts (form, list, header band) in the browser task.
+- **Measure mode:** an amendment's fallback cannot make a measured board Done, because the measure threshold lives in
+  the board file. The lead stops with `Stopped: amended target met (amendment <id>)` instead. Cost if wrong: a person
+  expects Done on a measured board.
+- **Honouring amendments:** the lead honours only an amendment whose `From:` names a person, not a session label. This
+  is weak; the real guard is the bot-member follow-up. Cost if wrong: a forged `From:` line passes.
+- **Planning toward a fallback:** once the goal's own target is out of reach and the intent limit allows, the lead
+  aims at the newest honoured fallback. With measure, a result that meets only the fallback is proposed as a candidate
+  before stopping, so the measurement records it. Cost if wrong: intents spent on a fallback the person did not want
+  pursued.
+- **Stop confirmation:** the page's confirmation focuses Cancel, so a repeated Enter cannot stop a board.
+
+Open follow-ups:
+
+- Run a toy board on hosted to check the paused branch, the amendment fallback and the `round:<n>` tags.
+- A bot member for agents with a database rule against writing `kind:amendment`, `kind:goal` or `kind:rules`.
+- Minor review items deferred from the tasks (limit validation, a stale-state re-read after a 409, the amendment list
+  not refreshing on a poll) are recorded in the build ledger, not fixed here.
