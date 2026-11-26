@@ -107,12 +107,25 @@ def parse_start(text: str | None) -> StartResult:
 
 
 def claude_result_text(stdout: str) -> str | None:
-    """The `result` text of `claude -p --output-format json` output, or None if there is none."""
+    """The `result` text of `claude -p` output, or None if there is none.
+
+    Accepts one JSON object (`--output-format json`) or JSON lines (`--output-format stream-json`),
+    where the last `result` line wins and unparsable lines (for example a cut-off last one) are ignored.
+    """
     try:
         data = json.loads(stdout)
     except (ValueError, TypeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    result = data.get("result")
-    return result if isinstance(result, str) else None
+        data = None
+    else:
+        if not isinstance(data, dict):
+            return None
+        result = data.get("result")
+        return result if isinstance(result, str) else None
+    for line in reversed((stdout or "").splitlines()):
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "result" and isinstance(data.get("result"), str):
+            return data["result"]
+    return None
