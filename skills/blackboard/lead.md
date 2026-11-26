@@ -38,8 +38,7 @@ label from SKILL.md, made once in this conversation, for every claim call.
      3. Swap `state:open` for `state:dropped` on every open intent.
      4. Rewrite progress (step 6), release your claim on the goal, and **end the loop**.
    - **Unreachable.** The facts show the goal cannot be met. Do the same as Done, but the conclusion says why it cannot
-     be met, and the goal becomes `state:stopped`. If the only reason is that the ideas have run out, do Stuck for ideas
-     (below) first, and decide Unreachable only if none of its ideas is worth an intent.
+     be met, and the goal becomes `state:stopped`.
    - **Correct.** A fact is shown wrong by later facts. Store a corrected fact, with the work.md fact template and a
      `verdict:` tag, and link it `supersedes` the wrong one.
    - **Drop.** An open intent that nobody holds a claim on has become pointless. Swap its `state:open` for
@@ -67,22 +66,6 @@ label from SKILL.md, made once in this conversation, for every claim call.
      When two results look like they would combine, an intent to combine them and check the result is a normal intent.
      If nothing is open, the goal is not met, it is not unreachable and the intent limit allows, write at least one
      intent.
-   - **Stuck for ideas.** Only when you are struggling, ask a Fable sub-agent for ideas. You are struggling when:
-     - Plan must write an intent, but every idea you have overlaps one the board has already tried;
-     - the last three intents to finish all ended in refuted or inconclusive facts; or
-     - you are about to decide Unreachable only because the ideas have run out.
-
-     Ask at most once a round, and not again until a new fact has arrived since the last idea hint.
-     1. Start the sub-agent with the Agent tool, `model "fable"`. Give it, as text, the goal, the rules, the progress
-        memory and the facts that matter, and ask for up to three ideas, each with why it could work and how a worker
-        would check it. It may read the workspace's code. Tell it to change nothing: no edits, no commits and no
-        shared-memory writes.
-     2. Store its answer as one hint, as SKILL.md's hint command does, so later rounds see what was suggested. Its
-        second line is `From: Fable sub-agent, asked by <your lead label>`.
-     3. Weigh each idea as you would any hint, and use none of them if none is good. An intent you write from one is
-        linked `derived-from` that hint.
-
-     If the Agent tool or a Fable model is not available, plan without it.
    - **Hints.** Treat every new hint as advice to weigh. If it asks for a change to the rules, tell the person; do not
      edit the rules.
 6. **Rewrite the progress memory** (`update` its content; its tags stay) with the template below. If step 4 found no new
