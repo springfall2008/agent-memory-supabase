@@ -1,6 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { routeWebApi, type WebStore } from '../../supabase/functions/_shared/web-api.ts';
 import { StoreError } from '../../supabase/functions/_shared/limits.ts';
+import { LazyEmbedder } from '../../supabase/functions/_shared/embedder.ts';
 import type {
   BrowseFilters,
   BrowsePage,
@@ -238,4 +239,19 @@ Deno.test('non-GET is 405 and an unknown route is 404', async () => {
   const u = await get(s, '/nope');
   assertEquals(u.status, 404);
   await u.json();
+});
+
+Deno.test('LazyEmbedder does not construct until first embed', async () => {
+  let made = 0;
+  const lazy = new LazyEmbedder(() => {
+    made++;
+    return {
+      embed: (t: string) => Promise.resolve([t.length]),
+      embedMany: (ts: string[]) => Promise.resolve(ts.map((t) => [t.length])),
+    };
+  });
+  assertEquals(made, 0);
+  assertEquals(await lazy.embed('ab'), [2]);
+  assertEquals(await lazy.embedMany(['abc']), [[3]]);
+  assertEquals(made, 1);
 });

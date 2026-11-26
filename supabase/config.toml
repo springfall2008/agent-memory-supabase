@@ -423,3 +423,6 @@ enabled = true
 
 [functions.agent-memory]
 verify_jwt = false
+
+[functions.web-api]
+verify_jwt = false

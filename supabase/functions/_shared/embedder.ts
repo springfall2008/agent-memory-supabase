@@ -31,3 +31,25 @@ export class GteSmallEmbedder implements Embedder {
     return out;
   }
 }
+
+/** Defers building the real embedder to the first embed, so requests that never embed (browse, graph) never pay for it. */
+export class LazyEmbedder implements Embedder {
+  #make: () => Embedder;
+  #inner: Embedder | undefined;
+
+  constructor(make: () => Embedder) {
+    this.#make = make;
+  }
+
+  #get(): Embedder {
+    return this.#inner ??= this.#make();
+  }
+
+  embed(text: string): Promise<number[]> {
+    return this.#get().embed(text);
+  }
+
+  embedMany(texts: string[]): Promise<number[][]> {
+    return this.#get().embedMany(texts);
+  }
+}
