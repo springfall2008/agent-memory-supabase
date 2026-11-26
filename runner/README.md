@@ -43,7 +43,8 @@ Runner state lives in `~/.board-runner/<board>/`, or under `$BOARD_RUNNER_HOME`:
 
 - `runner.log`;
 - `events.jsonl`, one line per lead turn, written by the lead's Stop hook;
-- `workers/<slot>-<label>.jsonl` and `.err`, one pair per worker run: the `.jsonl` is the worker's `stream-json` transcript, written live, and the newest 200 runs are kept;
+- `workers/<slot>-<label>.jsonl` and `.err`, one pair per worker run: the `.jsonl` is the worker's `stream-json`
+  transcript, written live, and the newest 200 runs are kept;
 - `measure/<n>.log`, one per measurement;
 - `state.json`, the lead's session and label plus the running workers, used to resume after a restart;
 - the `lead-settings.json` and `oneshot-settings.json` the runner generates.
