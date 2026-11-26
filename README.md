@@ -172,6 +172,8 @@ A local web page for looking at the store and at a running board, without drivin
 it cannot write, claim, link or delete anything. It is also local-only: `deno task web` binds to `127.0.0.1`, serves
 `http://localhost:8787`, and refuses any request whose `Host` header is not `localhost` or `127.0.0.1`.
 
+<img width="1878" height="957" alt="image" src="https://github.com/user-attachments/assets/49e446e8-5132-497b-82a6-1034d5b2d334" />
+
 ```sh
 deno task web
 ```
