@@ -197,8 +197,9 @@ oldest first. Report, in this order:
 ## stop
 
 1. Find the goal.
-2. `update` its tags, swapping `state:running` for `state:stopped`.
-3. Write nothing else. Every lead and worker sees the stopped state at its next step and ends its loop.
+2. If it is already `state:done` or `state:stopped`, say so and write nothing.
+3. `update` its tags, swapping `state:running` or `state:paused` for `state:stopped`.
+4. Write nothing else. Every lead and worker sees the stopped state at its next step and ends its loop.
 
 ## resume
 
