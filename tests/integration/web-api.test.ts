@@ -154,6 +154,24 @@ Deno.test('rw adds a hint and an intent that read back with the skill content, t
     assertEquals(i.body.memory.createdBy, w.rw.name);
   }));
 
+Deno.test('rw adds an amendment linked depends-on the goal; a done board refuses it', () =>
+  withWorld(async (w, admin, call) => {
+    const { board, goal } = await seedBoard(admin, w);
+    const a = await call(w.rw.id, '/amendments', { scope: w.alpha.name, board, text: '15% is\nenough' });
+    assertEquals(a.status, 201);
+    const m = await call(w.rw.id, `/memories/${a.body.memory.id}`);
+    assertEquals(m.body.memory.content, `Amendment: 15% is enough\nFrom: ${w.rw.name}`);
+    assertEquals(m.body.memory.tags, [`board:${board}`, 'kind:amendment', 'evergreen']);
+    assertEquals(m.body.memory.category, 'observation');
+    assertEquals(m.body.memory.links, [{ type: 'depends-on', direction: 'out', memoryId: goal }]);
+
+    await admin`update agent_memory.memories set tags = array_replace(tags, 'state:running', 'state:done')
+      where id = ${goal}`;
+    const done = await call(w.rw.id, '/amendments', { scope: w.alpha.name, board, text: 'x' });
+    assertEquals(done.status, 409);
+    assertEquals(done.body, { error: 'Board is done' });
+  }));
+
 Deno.test('ro gets the store write error and nothing is written', () =>
   withWorld(async (w, admin, call) => {
     const { board, goal } = await seedBoard(admin, w);
@@ -163,6 +181,8 @@ Deno.test('ro gets the store write error and nothing is written', () =>
     assertEquals(hint.body, noWrite);
     const intent = await call(w.ro.id, '/intents', { scope: w.alpha.name, board, text: 'x' });
     assertEquals(intent.body, noWrite);
+    const amend = await call(w.ro.id, '/amendments', { scope: w.alpha.name, board, text: 'x' });
+    assertEquals(amend.body, noWrite);
     const control = await call(w.ro.id, '/boards/control', { scope: w.alpha.name, board, action: 'pause' });
     assertEquals(control.status, 400);
     assertEquals(control.body, noWrite);

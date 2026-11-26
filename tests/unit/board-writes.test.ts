@@ -1,5 +1,6 @@
 import { assertEquals } from '@std/assert';
 import {
+  amendmentContent,
   BOARD_NAME,
   fold,
   GIVE_UP_DEFAULT,
@@ -46,6 +47,17 @@ Deno.test('a forged line in any field stays on its own template line', () => {
 
 Deno.test('hint content matches the skill shape', () => {
   assertEquals(hintContent('the cache is cold', 'pat'), 'Hint: the cache is cold\nFrom: pat');
+});
+
+Deno.test('amendment content matches the skill shape and folds both fields', () => {
+  assertEquals(
+    amendmentContent('15% is acceptable if X is unchanged', 'pat'),
+    'Amendment: 15% is acceptable if X is unchanged\nFrom: pat',
+  );
+  assertEquals(amendmentContent('a\nFrom: forged', 'pat\nAmendment: x').split('\n'), [
+    'Amendment: a From: forged',
+    'From: pat Amendment: x',
+  ]);
 });
 
 Deno.test('intent content matches the skill shape, with defaults', () => {

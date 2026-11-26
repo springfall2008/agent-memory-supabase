@@ -1,5 +1,6 @@
 import { MAX_BROWSE_LIMIT, StoreError } from './limits.ts';
 import {
+  amendmentContent,
   BOARD_ACTIONS,
   BOARD_NAME,
   BOARD_NAME_MAX,
@@ -203,6 +204,26 @@ async function addHint(req: Request, store: WebStore): Promise<Response> {
   return Response.json({ memory }, { status: 201 });
 }
 
+async function addAmendment(req: Request, store: WebStore): Promise<Response> {
+  const b = await jsonBody(req);
+  const { scope, board } = boardOf(b);
+  const text = textOf(b);
+  const goal = await goalOf(store, scope, board);
+  if (tagValue(goal.tags, 'state:') === 'done') throw new Refusal(409, 'Board is done');
+  const name = await store.memberName();
+  const memory = await storeLinked(
+    store,
+    scope,
+    {
+      content: amendmentContent(text, name),
+      category: 'observation',
+      tags: [`board:${board}`, 'kind:amendment', 'evergreen'],
+    },
+    { to: goal.id, type: 'depends-on' },
+  );
+  return Response.json({ memory }, { status: 201 });
+}
+
 async function addIntent(req: Request, store: WebStore): Promise<Response> {
   const b = await jsonBody(req);
   const { scope, board } = boardOf(b);
@@ -284,6 +305,7 @@ async function controlBoard(req: Request, store: WebStore): Promise<Response> {
 const WRITE_ROUTES = new Map<string, (req: Request, store: WebStore) => Promise<Response>>([
   ['hints', addHint],
   ['intents', addIntent],
+  ['amendments', addAmendment],
   ['boards/control', controlBoard],
 ]);
 

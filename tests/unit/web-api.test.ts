@@ -452,6 +452,75 @@ Deno.test('a scope the caller cannot read reads the same as a board with no goal
   assertEquals(await r.json(), { error: 'Board b not found' });
 });
 
+const AMENDMENT_TAGS = ['board:b', 'kind:amendment', 'evergreen'];
+
+Deno.test('POST /amendments stores the skill shape, linked depends-on the goal, and returns 201', async () => {
+  const s = new BoardFake();
+  const r = await post(s, '/amendments', { scope: 's1', board: 'b', text: '15% is\nacceptable' });
+  assertEquals(r.status, 201);
+  assertEquals((await r.json()).memory.id, NEW_ID);
+  assertEquals(s.writes(), [
+    {
+      fn: 'store',
+      args: ['s1', {
+        content: 'Amendment: 15% is acceptable\nFrom: pat',
+        category: 'observation',
+        tags: AMENDMENT_TAGS,
+      }],
+    },
+    { fn: 'relate', args: [NEW_ID, GOAL_ID, 'depends-on'] },
+  ]);
+});
+
+Deno.test('amendments are allowed in any board state but done, which is 409', async () => {
+  for (const state of ['running', 'paused', 'stopped']) {
+    const s = new BoardFake(state);
+    const r = await post(s, '/amendments', { scope: 's1', board: 'b', text: 'x' });
+    assertEquals(r.status, 201, state);
+    await r.json();
+  }
+  const s = new BoardFake('done');
+  const r = await post(s, '/amendments', { scope: 's1', board: 'b', text: 'x' });
+  assertEquals(r.status, 409);
+  assertEquals(await r.json(), { error: 'Board is done' });
+  assertEquals(s.writes(), []);
+});
+
+Deno.test('POST /amendments: unknown board is 404, bad bodies are 400, wrong type 415, GET 405', async () => {
+  const s = new BoardFake();
+  const nf = await post(s, '/amendments', { scope: 's1', board: 'nope', text: 'x' });
+  assertEquals(nf.status, 404);
+  assertEquals(await nf.json(), { error: 'Board nope not found' });
+  for (
+    const body of [
+      { board: 'b', text: 'x' },
+      { scope: 's1', board: 'B!', text: 'x' },
+      { scope: 's1', board: 'b', text: ' \n ' },
+      { scope: 's1', board: 'b', text: 'x'.repeat(2001) },
+    ]
+  ) {
+    const r = await post(s, '/amendments', body);
+    assertEquals(r.status, 400);
+    await r.json();
+  }
+  const t = await post(s, '/amendments', { scope: 's1', board: 'b', text: 'x' }, 'text/plain');
+  assertEquals(t.status, 415);
+  await t.json();
+  const g = await routeWebApi(new Request('http://x/functions/v1/web-api/amendments'), s);
+  assertEquals(g.status, 405);
+  await g.json();
+  assertEquals(s.writes(), []);
+});
+
+Deno.test('a failed link after an amendment deletes the stored memory and returns the error', async () => {
+  const s = new BoardFake();
+  s.relateFails = new StoreError('Memory has too many links');
+  const r = await post(s, '/amendments', { scope: 's1', board: 'b', text: 'x' });
+  assertEquals(r.status, 400);
+  assertEquals(await r.json(), { error: 'Memory has too many links' });
+  assertEquals(s.writes().map((c) => c.fn), ['store', 'relate', 'delete']);
+});
+
 Deno.test('write routes need a JSON content type, else 415', async () => {
   const s = new BoardFake();
   for (const path of ['/hints', '/intents', '/boards/control']) {

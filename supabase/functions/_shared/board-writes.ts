@@ -28,6 +28,11 @@ export function hintContent(text: string, name: string): string {
   return `Hint: ${fold(text)}\nFrom: ${fold(name)}`;
 }
 
+/** A person's amendment to the goal: a sub-goal or fallback, written by a person and never by a worker. */
+export function amendmentContent(text: string, name: string): string {
+  return `Amendment: ${fold(text)}\nFrom: ${fold(name)}`;
+}
+
 export interface IntentFields {
   text: string;
   name: string;
