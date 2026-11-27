@@ -903,3 +903,70 @@ button.danger {
   font-weight: 600;
   margin-bottom: 4px;
 }
+
+/* ── commit diff ───────────────────────────────────────────────── */
+
+.drawer-github {
+  margin: 8px 0;
+}
+
+.github-link {
+  color: var(--accent);
+}
+
+.diff-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 100%;
+}
+
+.diff-sha {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.diff-views {
+  display: flex;
+  gap: 6px;
+}
+
+.diff-views button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.diff-text {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.diff-line {
+  white-space: pre;
+}
+
+.diff-add {
+  color: var(--ok);
+}
+
+.diff-del {
+  color: var(--bad);
+}
+
+.diff-hunk {
+  color: var(--accent);
+}
+
+.diff-file,
+.diff-meta {
+  color: var(--muted);
+  font-weight: 600;
+}
