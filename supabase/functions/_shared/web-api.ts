@@ -488,6 +488,8 @@ export async function routeWebApi(req: Request, store: WebStore, usage: UsageSto
           tagsAll,
           scopes: list(p, 'scope'),
           detail: detail as 'short' | 'full' | undefined,
+          // The browser re-reads a goal or progress memory when this moves: an edit past the snippet changes nothing else.
+          withUpdatedAt: true,
         })),
       );
     }

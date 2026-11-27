@@ -117,6 +117,7 @@ Deno.test('workerLabel falls back to the claim session, then the claim descripti
 
 type Node = {
   id: string;
+  updatedAt?: string;
   scope: string;
   category: string;
   tags: string[];
@@ -154,6 +155,14 @@ Deno.test('diffGraph sees tags, snippet and superseded changes', () => {
     node('c', { superseded: true }),
   );
   assertEquals(diffGraph(prev, next).changed, ['a', 'b', 'c']);
+});
+
+Deno.test('diffGraph sees a content edit below the snippet through updatedAt', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const prev = graph(node('a', { updatedAt: at }), node('b'));
+  const next = graph(node('a', { updatedAt: '2026-01-01T00:00:05.000Z' }), node('b'));
+  assertEquals(diffGraph(prev, next).changed, ['a']);
+  assertEquals(diffGraph(prev, graph(node('a', { updatedAt: at }), node('b'))).changed, []);
 });
 
 Deno.test('diffGraph sees a claim appear, disappear or move', () => {

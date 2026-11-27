@@ -115,6 +115,8 @@ export interface GraphFilters {
   tagsAll?: string[];
   /** 'short' (default): a snippet per node; 'full': the whole content, with a lower node cap. */
   detail?: 'short' | 'full';
+  /** Give each node its `updatedAt`, so a caller that polls sees a content edit past the snippet (the web UI). */
+  withUpdatedAt?: boolean;
 }
 
 export interface GraphNode {
@@ -123,6 +125,7 @@ export interface GraphNode {
   category: MemoryCategory;
   tags: string[];
   createdAt: string;
+  updatedAt?: string;
   snippet?: string;
   content?: string;
   superseded?: true;

@@ -8,6 +8,7 @@
  *   id: string;
  *   tags: string[];
  *   snippet?: string;
+ *   updatedAt?: string;
  *   superseded?: true;
  *   claim?: Claim;
  * }} GraphNode
@@ -28,11 +29,18 @@ function claimKey(c) {
  * @returns {string}
  */
 function nodeKey(n) {
-  return JSON.stringify([[...n.tags].sort(), n.snippet ?? null, n.superseded === true, claimKey(n.claim)]);
+  return JSON.stringify([
+    [...n.tags].sort(),
+    n.snippet ?? null,
+    n.updatedAt ?? null,
+    n.superseded === true,
+    claimKey(n.claim),
+  ]);
 }
 
 /**
- * Which node ids appeared, vanished or changed (tags, snippet, superseded or the whole claim) between two graphs.
+ * Which node ids appeared, vanished or changed (tags, snippet, updatedAt, superseded or the whole claim) between two
+ * graphs. updatedAt is what shows an edit past the snippet, such as the goal's `Max intents:` line.
  * @param {GraphResult | null} prev
  * @param {GraphResult} next
  * @returns {{ added: string[]; removed: string[]; changed: string[] }}

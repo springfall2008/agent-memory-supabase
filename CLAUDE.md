@@ -96,6 +96,8 @@ Design: `docs/superpowers/specs/2026-11-22-memory-claims-design.md` and
 filters (tags or tags_all required) oldest first, capped at `GRAPH_MAX_NODES` (400) or `GRAPH_FULL_MAX_NODES` (100) for
 full content, with `count(*) over ()` as `total`, then reads `memory_links` between those ids (the links policy hides
 unreadable or deleted ends), the superseded set, and the batched claims. No decay and no `touch_accessed`.
+`withUpdatedAt` adds each node's `updatedAt`; only `web-api` asks for it (the browser's diff needs it to see an edit
+past the snippet), so the MCP tool's output stays as it was.
 
 **Blackboard skill.** `skills/blackboard/` is a Claude Code skill, made of instructions only, that runs shared-goal
 boards on these tools: graph, claim_next, claims, links and search browse. It has no server code of its own. The design
