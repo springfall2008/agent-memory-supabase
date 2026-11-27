@@ -323,8 +323,11 @@ A fact whose worker committed its work carries a `Commit: <sha> on <branch>` lin
   board file: `/blackboard start` writes the line into a new board's goal, and adds it to an existing goal that lacks
   one. Board branches stay local until someone pushes them, so the link shows the commit only after a push (to the repo
   or a fork).
-- **A Diff tab**, from the board's workspace on this machine, so it needs no push. "This commit" shows `git show`, and
-  "All changes vs main" shows every commit on top of `origin/HEAD` (or `origin/main`, `main`, `master`) and their diff.
+- **A Diff tab**, from the board's workspace on this machine, so it needs no push. It reads like GitHub's split view:
+  the message (or commit list) on top, then a card per file with old lines on the left and new on the right, changed
+  words marked, and 3, 10 or all lines of context. "This commit" shows the commit alone; "All changes vs main" shows
+  every commit on top of `origin/HEAD` (or `origin/main`, `main`, `master`). A conclusion names the winning commit and
+  opens on "All changes vs main". "Full width" widens the drawer across the page.
   The board runner records the workspace in its `state.json`; a board whose runner has not been restarted since says
   so. The `/diff/<board>/<sha>` route accepts only a board name and a hex SHA, runs `git` without a shell, external
   diff tools or a pager, stops after 10 s and returns at most 2 MB.
