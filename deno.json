@@ -8,7 +8,7 @@
     "test:int": "deno test -A tests/integration",
     "test:e2e": "deno test -A tests/e2e",
     "test:db": "supabase test db",
-    "web": "deno run --allow-net --allow-read --allow-env --env-file=.env web/server.ts"
+    "web": "deno run --allow-net --allow-read --allow-env --allow-run=git --env-file=.env web/server.ts"
   },
   "fmt": {
     "lineWidth": 120,

@@ -1,5 +1,6 @@
 import { type Config, loadConfig } from './lib/config.ts';
 import { hostAllowed } from './lib/guard.ts';
+import { serveDiff } from './lib/diff.ts';
 import { serveLog } from './lib/logs.ts';
 import { proxyApi } from './lib/proxy.ts';
 import { serveStatic } from './lib/static.ts';
@@ -20,6 +21,7 @@ async function route(req: Request, deps: Deps): Promise<Response> {
   if (pathname === '/api' || pathname.startsWith('/api/')) return await proxyApi(req, deps.cfg, deps.fetchFn);
   if (req.method !== 'GET') return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
   if (pathname.startsWith('/logs/')) return await serveLog(url, deps.cfg.runnerHome);
+  if (pathname.startsWith('/diff/')) return await serveDiff(url, deps.cfg.runnerHome);
   return await serveStatic(deps.staticRoot, pathname);
 }
 
