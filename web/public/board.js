@@ -1,4 +1,5 @@
-// The Board tab: the board picker, the status strip, and the live graph of one board or one tag.
+// The Board tab: the board picker, the status strip, the board toolbar (`toolbar.js`), and the live graph of one board
+// or one tag.
 import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { diffGraph } from './diff.js';
 import { clock, h, option } from './dom.js';
@@ -7,6 +8,7 @@ import { kindOf, shortName, stateOf } from './names.js';
 import { connState, nextDelay, POLL_MS, STALE_MS } from './poll.js';
 import { boardHash } from './route.js';
 import { boardStatus } from './status.js';
+import { createToolbar } from './toolbar.js';
 
 /**
  * @typedef {{ kind: 'board'; scope: string; board: string } | { kind: 'tag'; tag: string }} Target
@@ -38,7 +40,7 @@ const STATES = ['running', 'paused', 'stopped', 'done'];
 
 /**
  * @param {Element} el
- * @param {{ onSelect(id: string): void }} opts
+ * @param {{ onSelect(id: string): void; onPoll?(): void }} opts `onPoll` runs after each graph poll that lands
  * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void;
  *   nameOf(id: string): string | null; nodes(): any[]; progressText(): string; status(): ShownStatus | null;
  *   pollNow(): Promise<void> }}
@@ -57,7 +59,12 @@ export function mountBoard(el, opts) {
   // Only the notices are announced: the strip changes its refresh time on every poll.
   notices.setAttribute('aria-live', 'polite');
   const graphEl = h('div', 'graph');
-  el.replaceChildren(bar, strip, notices, graphEl);
+  const toolbar = createToolbar({
+    pollNow: () => pollNow(),
+    status: () => shownStatus(),
+    nodes: () => loop?.prev?.nodes ?? [],
+  });
+  el.replaceChildren(bar, strip, toolbar.el, notices, graphEl);
 
   let view = null;
   let viewError = '';
@@ -128,6 +135,22 @@ export function mountBoard(el, opts) {
   /** @param {string} text @param {string} [cls] */
   const item = (text, cls) => h('span', cls ? `item ${cls}` : 'item', text);
 
+  /**
+   * Put `parts` in the strip. The toolbar's intent limit item stays where it is rather than being taken out and put
+   * back, so the limit box keeps focus while the strip redraws around it on each poll.
+   * @param {Node[]} parts
+   */
+  function placeStrip(parts) {
+    const i = parts.indexOf(toolbar.limit);
+    if (i < 0 || toolbar.limit.parentNode !== strip) {
+      strip.replaceChildren(...parts);
+      return;
+    }
+    for (const c of [...strip.childNodes]) if (c !== toolbar.limit) c.remove();
+    toolbar.limit.before(...parts.slice(0, i));
+    toolbar.limit.after(...parts.slice(i + 1));
+  }
+
   /** @param {Loop} me */
   function renderStrip(me) {
     const t = me.target;
@@ -135,13 +158,14 @@ export function mountBoard(el, opts) {
     const parts = [];
     if (t.kind === 'board') {
       const status = boardStatus(nodes, me.goalText, me.progressText);
-      const max = status.maxIntents === 'none' ? 'no limit' : status.maxIntents ?? 'unknown';
       const state = status.state ?? 'unknown';
+      // The toolbar draws "Intents n of max" itself, with the limit as a button that edits it.
+      toolbar.update(me.prev ? { ...status, truncated: !!me.prev.truncated } : null);
       parts.push(
         item(`${t.board} · ${t.scope}`, 'name'),
         item(`State: ${state}`, STATES.includes(state) ? `state state-${state}` : 'state'),
         item(`Round ${status.round ?? 'unknown'}`),
-        item(`Intents ${status.intents} of ${max}`),
+        toolbar.limit,
         item(`Best: ${status.best ?? 'unknown'}`, 'best'),
       );
     } else {
@@ -149,7 +173,7 @@ export function mountBoard(el, opts) {
     }
     if (me.refreshed) parts.push(item(`refreshed ${clock(me.refreshed)}`));
     parts.push(connItem(connState(me.conn, me.refreshed, Date.now())));
-    strip.replaceChildren(...parts);
+    placeStrip(parts);
 
     const msgs = viewError ? [viewError] : [];
     if (me.prev && t.kind === 'board' && !nodes.some((/** @type {any} */ n) => kindOf(n.tags) === 'intent')) {
@@ -191,6 +215,8 @@ export function mountBoard(el, opts) {
   function signOut() {
     signedOut = true;
     if (loop) cancel(loop);
+    // Nothing more can be written; the toolbar goes, and the strip's limit becomes plain text.
+    toolbar.show(null);
     strip.replaceChildren(...[...strip.children].filter((c) => !c.classList.contains('conn')), connItem('signed-out'));
     notices.replaceChildren(h('p', 'notice error', NOT_SIGNED_IN));
   }
@@ -268,7 +294,13 @@ export function mountBoard(el, opts) {
     me.conn = ok ? 'live' : 'retrying';
     if (ok) me.error = null;
     me.delay = nextDelay(me.delay, ok);
-    renderStrip(me);
+    // A throw in the strip, the toolbar or the poll hook must not stop the loop or leave `pollNow` waiters hanging.
+    try {
+      renderStrip(me);
+      if (ok) opts.onPoll?.();
+    } catch {
+      console.error('Board strip update failed');
+    }
     // A write landed while this poll was in flight, so it may predate the write: poll again at once.
     const again = me.again;
     me.again = false;
@@ -309,6 +341,8 @@ export function mountBoard(el, opts) {
   /** @param {Target} target */
   function start(target) {
     if (loop) cancel(loop);
+    // A panel or Stop confirmation open for the old board closes, and the new board's toolbar is built afresh.
+    toolbar.show(target.kind === 'board' ? { scope: target.scope, board: target.board } : null);
     view?.clear();
     /** @type {Loop} */
     const me = {
@@ -340,6 +374,12 @@ export function mountBoard(el, opts) {
     tick(me);
   }
 
+  /** @returns {ShownStatus | null} */
+  function shownStatus() {
+    if (!loop?.prev || loop.target.kind !== 'board') return null;
+    return { ...boardStatus(loop.prev.nodes, loop.goalText, loop.progressText), truncated: !!loop.prev.truncated };
+  }
+
   loadBoards();
   strip.replaceChildren(item('Choose a board to watch it live.'));
 
@@ -356,10 +396,7 @@ export function mountBoard(el, opts) {
     /** The full content of the shown board's progress memory, or '' when it is not loaded. */
     progressText: () => loop?.progressText ?? '',
     /** The strip's numbers for the shown board, or null for a tag graph or before the first poll. */
-    status: () => {
-      if (!loop?.prev || loop.target.kind !== 'board') return null;
-      return { ...boardStatus(loop.prev.nodes, loop.goalText, loop.progressText), truncated: !!loop.prev.truncated };
-    },
+    status: () => shownStatus(),
     pollNow,
   };
 }

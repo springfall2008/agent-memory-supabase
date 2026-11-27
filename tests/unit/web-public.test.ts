@@ -34,12 +34,14 @@ import {
   hintLinks,
   intentUsage,
   limitText,
+  maxText,
   needsRunAgain,
   offersIntent,
   parseLimit,
   PRODUCE_DEFAULT,
   refusedState,
   TEXT_MAX,
+  toolbarOffers,
 } from '../../web/public/writes.js';
 import * as server from '../../supabase/functions/_shared/board-writes.ts';
 
@@ -327,6 +329,37 @@ Deno.test('controlActions offers only the buttons valid in each state, as the se
     }
   }
   assertEquals(Object.keys(ACTION_LABELS).sort(), [...server.BOARD_ACTIONS].sort());
+});
+
+Deno.test('toolbarOffers: controls per state, intents while running or paused, amendments and limit unless done', () => {
+  const offers = (state: string | null) => toolbarOffers(state);
+  assertEquals(offers('running'), {
+    controls: ['pause', 'stop'],
+    hint: true,
+    intent: true,
+    amendment: true,
+    limit: true,
+  });
+  assertEquals(offers('paused'), {
+    controls: ['resume', 'stop'],
+    hint: true,
+    intent: true,
+    amendment: true,
+    limit: true,
+  });
+  assertEquals(offers('stopped'), { controls: ['restart'], hint: true, intent: false, amendment: true, limit: true });
+  assertEquals(offers('done'), { controls: [], hint: true, intent: false, amendment: false, limit: false });
+  assertEquals(offers(null), { controls: [], hint: true, intent: false, amendment: true, limit: true });
+  // The toolbar's + Intent follows the same rule as the drawer's intent on the goal.
+  for (const state of ['running', 'paused', 'stopped', 'done', null]) {
+    assertEquals(offers(state).intent, offersIntent(['kind:goal'], state));
+  }
+});
+
+Deno.test('maxText names the limit the strip shows', () => {
+  assertEquals(maxText(20), '20');
+  assertEquals(maxText('none'), 'no limit');
+  assertEquals(maxText(null), 'unknown');
 });
 
 Deno.test('intentUsage says how many intents of the limit the board has used', () => {

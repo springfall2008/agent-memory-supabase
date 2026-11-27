@@ -1,10 +1,12 @@
-// Sending one write from the drawer: its controls disabled while in flight, a status line saying what happened, and
-// an immediate graph poll once it lands.
+// Sending one write from the toolbar or the drawer: its controls disabled while in flight, a status line saying what
+// happened, and an immediate graph poll once it lands.
 import { ApiError, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
 
 /**
- * @typedef {{ live(): boolean; open(id: string): void }} Hooks `live` is false once the drawer shows something else
+ * @typedef {{ live(): boolean; open(id: string): void; onGraph?(refresh: () => void): void }} Hooks `live` is false
+ *   once the drawer shows something else, or the toolbar another board; `onGraph`, where given, runs `refresh` after
+ *   each graph poll while `live`
  * @typedef {HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement} Control
  * @typedef {{ ok: true; result: any; polled: Promise<void> } | { ok: false; error: string }} Outcome `polled` settles
  *   once the graph poll that follows the write has finished
@@ -38,7 +40,7 @@ export function say(line, tone, ...parts) {
 
 /**
  * Send one write with `controls` disabled until it settles, saying so on `line`. Controls come back on only while the
- * drawer still shows this memory; a finished write polls the graph either way.
+ * drawer or toolbar still shows what they belong to; a finished write polls the graph either way.
  * @param {Control[]} controls
  * @param {HTMLElement} line
  * @param {Hooks} hooks

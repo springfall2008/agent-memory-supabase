@@ -17,7 +17,8 @@ import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
  *   progressText?: () => string;
  *   status?: () => import('./board.js').ShownStatus | null;
  *   pollNow?: () => Promise<void>;
- * }} DrawerCtx `scope`, `status` and `pollNow` come only from the Board tab's board view, and turn on the write forms
+ * }} DrawerCtx `scope`, `status` and `pollNow` come only from the Board tab's board view, and turn on the drawer's
+ *   shortcuts and the goal's amendments
  * @typedef {'memory' | 'links' | 'log'} TabName
  * @typedef {import('./names.js').Verdict} Verdict
  */
@@ -38,6 +39,8 @@ let seq = 0;
 let wanted = 'memory';
 /** @type {{ el: HTMLElement; setActive(on: boolean): void; destroy(): void } | null} */
 let log = null;
+/** What the shown memory redraws after each graph poll, such as the goal's amendments; each open starts it empty. */
+let onGraph = /** @type {(() => void)[]} */ ([]);
 
 function build() {
   const root = h('aside', 'drawer');
@@ -115,8 +118,14 @@ function stopLog() {
 /** Close the drawer and stop any log polling. */
 export function closeDrawer() {
   seq++;
+  onGraph = [];
   stopLog();
   if (ui) ui.root.hidden = true;
+}
+
+/** Redraw what the shown memory draws from the graph, after a graph poll. */
+export function refreshDrawer() {
+  for (const refresh of onGraph) refresh();
 }
 
 /**
@@ -128,6 +137,7 @@ export function closeDrawer() {
 export async function openDrawer(id, ctx) {
   ui ??= build();
   const my = ++seq;
+  onGraph = [];
   stopLog();
   ui.root.hidden = false;
   ui.root.dataset.id = id;
@@ -284,7 +294,11 @@ function memoryPanel(m, ctx, my) {
   out.push(h('div', 'drawer-content', m.content));
   const { board, scope, nodes, status, pollNow } = ctx;
   if (board && scope && nodes && status && pollNow) {
-    const hooks = { live: () => my === seq, open: (/** @type {string} */ id) => openDrawer(id, ctx) };
+    const hooks = {
+      live: () => my === seq,
+      open: (/** @type {string} */ id) => openDrawer(id, ctx),
+      onGraph: (/** @type {() => void} */ refresh) => onGraph.push(() => my === seq && refresh()),
+    };
     out.push(...writeSection(m, { board, scope, nodes, status, pollNow }, hooks));
   }
   return out;
