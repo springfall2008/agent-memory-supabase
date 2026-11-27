@@ -1,7 +1,7 @@
 import type { Config } from './config.ts';
 
 const PREFIX = '/api/';
-const ALLOWED = /^(scopes|boards|graph|memories(\/[0-9A-Za-z-]+)?)$/;
+const ALLOWED = /^(scopes|boards|graph|usage|memories(\/[0-9A-Za-z-]+)?)$/;
 const POST_ALLOWED = /^(hints|intents|amendments|boards\/control)$/;
 const UNREACHABLE = { error: 'web-api unreachable' };
 /** How long the upstream gets to answer (and to send its body) before the browser is told it is unreachable. */

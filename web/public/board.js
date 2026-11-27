@@ -9,6 +9,7 @@ import { connState, nextDelay, POLL_MS, STALE_MS } from './poll.js';
 import { boardHash } from './route.js';
 import { boardStatus } from './status.js';
 import { createToolbar } from './toolbar.js';
+import { stripText, totalTitle } from './usage.js';
 
 /**
  * @typedef {{ kind: 'board'; scope: string; board: string } | { kind: 'tag'; tag: string }} Target
@@ -31,9 +32,14 @@ import { createToolbar } from './toolbar.js';
  *   refreshed: Date | null;
  *   again: boolean;
  *   waiters: (() => void)[];
+ *   usage: { runs: import('./usage.js').Run[]; total: import('./usage.js').Tokens } | null;
+ *   usageAt: number;
  * }} Loop
  * @typedef {import('./status.js').BoardStatus & { truncated: boolean }} ShownStatus
  */
+
+/** How often the board's token usage is re-read: it changes only when a run ends or a lead turn does. */
+const USAGE_MS = 30_000;
 
 /** Goal states the strip colours. */
 const STATES = ['running', 'paused', 'stopped', 'done'];
@@ -43,7 +49,7 @@ const STATES = ['running', 'paused', 'stopped', 'done'];
  * @param {{ onSelect(id: string): void; onPoll?(): void }} opts `onPoll` runs after each graph poll that lands
  * @returns {{ showBoard(scope: string, board: string): void; showTag(tag: string): void;
  *   nameOf(id: string): string | null; nodes(): any[]; progressText(): string; status(): ShownStatus | null;
- *   pollNow(): Promise<void> }}
+ *   usage(): import('./usage.js').Run[]; pollNow(): Promise<void> }}
  */
 export function mountBoard(el, opts) {
   const picker = /** @type {HTMLSelectElement} */ (h('select', 'board-picker'));
@@ -168,6 +174,11 @@ export function mountBoard(el, opts) {
         toolbar.limit,
         item(`Best: ${status.best ?? 'unknown'}`, 'best'),
       );
+      if (me.usage) {
+        const tokens = item(stripText(me.usage.total), 'tokens');
+        tokens.title = totalTitle(me.usage.total);
+        parts.push(tokens);
+      }
     } else {
       parts.push(item(`Tag ${t.tag}`, 'name'), item(`${nodes.length} memories`));
     }
@@ -230,6 +241,16 @@ export function mountBoard(el, opts) {
     if (t.kind === 'board') q.set('scope', t.scope);
     const graph = /** @type {any} */ (await getJson(`/graph?${q}`, me.ctrl.signal));
     if (me.cancelled) return;
+    if (t.kind === 'board' && Date.now() - me.usageAt >= USAGE_MS) {
+      me.usageAt = Date.now();
+      try {
+        const u = new URLSearchParams({ scope: t.scope, board: t.board });
+        me.usage = /** @type {any} */ (await getJson(`/usage?${u}`, me.ctrl.signal));
+      } catch {
+        // Usage is extra: a failed read keeps the last figures and never stops the graph.
+      }
+      if (me.cancelled) return;
+    }
     const diff = diffGraph(me.prev, graph);
     if (t.kind === 'board') {
       const touched = new Set([...diff.added, ...diff.changed]);
@@ -363,6 +384,8 @@ export function mountBoard(el, opts) {
       refreshed: null,
       again: false,
       waiters: [],
+      usage: null,
+      usageAt: 0,
     };
     loop = me;
     syncPicker();
@@ -397,6 +420,8 @@ export function mountBoard(el, opts) {
     progressText: () => loop?.progressText ?? '',
     /** The strip's numbers for the shown board, or null for a tag graph or before the first poll. */
     status: () => shownStatus(),
+    /** The shown board's runs with their token counts, or none for a tag graph or before the first read. */
+    usage: () => (loop?.target.kind === 'board' ? loop.usage?.runs ?? [] : []),
     pollNow,
   };
 }

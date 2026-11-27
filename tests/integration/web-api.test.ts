@@ -2,6 +2,7 @@ import { assertEquals } from '@std/assert';
 import { connect } from '../../supabase/functions/_shared/db.ts';
 import { PgMemoryStore } from '../../supabase/functions/_shared/pg-store.ts';
 import { routeWebApi } from '../../supabase/functions/_shared/web-api.ts';
+import { PgUsageStore } from '../../supabase/functions/_shared/usage-store.ts';
 import { adminSql, LOCAL_DB_URL, makeWorld, type World } from '../helpers/fixtures.ts';
 import { FakeEmbedder } from '../helpers/fake-embedder.ts';
 
@@ -19,7 +20,11 @@ async function withWorld(fn: (w: World, admin: Admin, call: Call) => Promise<voi
     const init: RequestInit = body === undefined
       ? {}
       : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
-    const r = await routeWebApi(new Request(`http://x/functions/v1/web-api${path}`, init), store);
+    const r = await routeWebApi(
+      new Request(`http://x/functions/v1/web-api${path}`, init),
+      store,
+      new PgUsageStore(sql, memberId),
+    );
     return { status: r.status, body: await r.json() };
   };
   try {
@@ -262,4 +267,31 @@ Deno.test('raising the limit on a board stopped at its limit sets it running', (
     const [row] = await admin`select content, tags from agent_memory.memories where id = ${goal}`;
     assertEquals(row.content, GOAL_TEXT.replace('Max intents: 5', 'Max intents: none'));
     assertEquals(row.tags, [`board:${board}`, 'kind:goal', 'state:running', 'evergreen']);
+  }));
+
+Deno.test('/usage records a run and reads it back with the board total', () =>
+  withWorld(async (w, _admin, call) => {
+    const body = {
+      scope: w.alpha.name,
+      board: 'toy-usage',
+      runLabel: 'board-toy-usage-0001',
+      role: 'worker',
+      intentId: null,
+      outcome: 'none',
+      runnerModel: 'sonnet',
+      tokens: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 },
+      turns: 2,
+      durationMs: 500,
+      models: { 'claude-sonnet-5-5': { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
+      startedAt: null,
+      endedAt: '2026-11-27T08:01:00.000Z',
+    };
+    const posted = await call(w.rw.id, '/usage', body);
+    assertEquals(posted.status, 201);
+    const read = await call(w.ro.id, `/usage?scope=${w.alpha.name}&board=toy-usage`);
+    assertEquals(read.status, 200);
+    assertEquals(read.body.total, { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 });
+    assertEquals(read.body.runs[0].runLabel, 'board-toy-usage-0001');
+    const refused = await call(w.ro.id, '/usage', body);
+    assertEquals([refused.status, refused.body.error], [403, `No write access to scope '${w.alpha.name}'`]);
   }));

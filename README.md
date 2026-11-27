@@ -286,6 +286,12 @@ separate bot member for agents, with a database rule that bot members cannot wri
 | `/intents` | `scope`, `board`, `text`, `produce?`, `giveUp?`, `from?` | 201 `{ memory }`; 409 `Board is not running` unless running or paused |
 | `/amendments` | `scope`, `board`, `text` | 201 `{ memory }`; 409 when the board is done |
 | `/boards/control` | `scope`, `board`, `action?` (`pause`, `resume`, `stop`, `restart`), `maxIntents?` (number or `"none"`) | 200 `{ goal }`; 409 `Board is <state>` when the action is not allowed from there |
+| `/usage` | one run's raw token counts (sent by the board runner, never the browser) | 201 `{ id }`; 404 or 403 for a scope the token cannot write |
+| `/usage/delete` | `scope`, `board` | 200 `{ deleted }` |
+
+`GET /usage?scope=&board=` returns a board's runs, newest first, and their summed `total`. The strip shows that total
+("Tokens 12M in · 310k out", input counting cache reads and writes), and an intent's, fact's or goal's drawer shows the
+runs that worked on it. These are raw token counts; no costs are stored or shown.
 
 `text` is 1 to 2,000 characters; `produce` and `giveUp` at most 500. A board or memory the caller cannot read gives a
 404 that reads the same whether it is absent or unreadable. If linking fails after a memory is stored, the route

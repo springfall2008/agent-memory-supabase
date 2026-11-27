@@ -82,6 +82,28 @@ export interface Backup {
     claimedAt: string;
     expiresAt: string | null;
   }[];
+  /** Absent in files written before board usage. `recordedBy` is a display name; counts are decimal strings. */
+  boardUsage?: {
+    scope: string;
+    board: string;
+    runLabel: string;
+    role: string;
+    intentId: string | null;
+    outcome: string | null;
+    runnerModel: string;
+    inputTokens: string;
+    outputTokens: string;
+    cacheReadTokens: string;
+    cacheWriteTokens: string;
+    turns: number | null;
+    durationMs: string | null;
+    models: Record<string, unknown>;
+    startedAt: string | null;
+    endedAt: string | null;
+    recordedBy: string;
+    createdAt: string;
+    updatedAt: string;
+  }[];
 }
 
 const USAGE = `Usage: deno run -A scripts/backup.ts <command> ...
@@ -177,6 +199,19 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
       and (c.expires_at is null or c.expires_at > now()) and cm.deactivated_at is null
     order by c.memory_id`;
 
+  const boardUsage = await sql`
+    select s.name as scope, u.board, u.run_label as "runLabel", u.role, u.intent_id as "intentId", u.outcome,
+           u.runner_model as "runnerModel", u.input_tokens::text as "inputTokens",
+           u.output_tokens::text as "outputTokens", u.cache_read_tokens::text as "cacheReadTokens",
+           u.cache_write_tokens::text as "cacheWriteTokens", u.turns, u.duration_ms::text as "durationMs", u.models,
+           ${sql.unsafe(TS('u.started_at'))} as "startedAt", ${sql.unsafe(TS('u.ended_at'))} as "endedAt",
+           m.display_name as "recordedBy", ${sql.unsafe(TS('u.created_at'))} as "createdAt",
+           ${sql.unsafe(TS('u.updated_at'))} as "updatedAt"
+    from agent_memory.board_usage u join agent_memory.scopes s on s.id = u.scope_id
+    join agent_memory.members m on m.id = u.recorded_by
+    where ${scope === undefined ? sql`true` : sql`s.name = ${scope}`}
+    order by s.name, u.board, u.run_label`;
+
   const subscriptions = await sql`
     select sub.session_id as "sessionId", sub.thread_id as "threadId", sub.last_seen_seq as "lastSeenSeq",
            ${sql.unsafe(TS('sub.subscribed_at'))} as "subscribedAt"
@@ -218,6 +253,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
   for (const l of threadLinks) wanted.add(l.linkedBy);
   for (const l of memoryLinks) wanted.add(l.createdBy);
   for (const c of memoryClaims) wanted.add(c.member);
+  for (const u of boardUsage) wanted.add(u.recordedBy);
   const members = await sql`
     select id, display_name as "displayName", kind, email, auth_user_id as "authUserId",
            ${sql.unsafe(TS('created_at'))} as "createdAt", is_admin as "isAdmin",
@@ -241,6 +277,7 @@ async function exportSnapshot(sql: Sql, scope?: string): Promise<Backup> {
     subscriptions: [...subscriptions] as unknown as NonNullable<Backup['subscriptions']>,
     memoryLinks: [...memoryLinks] as unknown as NonNullable<Backup['memoryLinks']>,
     memoryClaims: [...memoryClaims] as unknown as NonNullable<Backup['memoryClaims']>,
+    boardUsage: [...boardUsage] as unknown as NonNullable<Backup['boardUsage']>,
   };
 }
 
@@ -344,6 +381,21 @@ export async function restoreBackup(sql: Sql, data: Backup): Promise<void> {
       },
                 ${c.description}, (${c.claimedAt}::text)::timestamptz, (${c.expiresAt}::text)::timestamptz)`;
     }
+    for (const u of data.boardUsage ?? []) {
+      await tx`
+        insert into agent_memory.board_usage (scope_id, board, run_label, role, intent_id, outcome, runner_model,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, turns, duration_ms, models, started_at,
+          ended_at, recorded_by, created_at, updated_at)
+        values (${
+        scopeId(u.scope)
+      }, ${u.board}, ${u.runLabel}, ${u.role}, ${u.intentId}, ${u.outcome}, ${u.runnerModel},
+          ${u.inputTokens}::bigint, ${u.outputTokens}::bigint, ${u.cacheReadTokens}::bigint, ${u.cacheWriteTokens}::bigint,
+          ${u.turns}, ${u.durationMs}::bigint, ${
+        JSON.stringify(u.models)
+      }::text::jsonb, (${u.startedAt}::text)::timestamptz,
+          (${u.endedAt}::text)::timestamptz, ${memberId(u.recordedBy)}, (${u.createdAt}::text)::timestamptz,
+          (${u.updatedAt}::text)::timestamptz)`;
+    }
     for (const x of data.subscriptions ?? []) {
       await tx`
         insert into agent_memory.thread_subscriptions (session_id, thread_id, last_seen_seq, subscribed_at)
@@ -385,7 +437,7 @@ async function main(): Promise<void> {
         `Wrote ${out}: ${data.scopes.length} scopes, ${data.members.length} members, ` +
           `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
             data.memoryLinks?.length ?? 0
-          } memory links, ${data.memoryClaims?.length ?? 0} memory claims`,
+          } memory links, ${data.memoryClaims?.length ?? 0} memory claims, ${data.boardUsage?.length ?? 0} usage rows`,
       );
     } else {
       const data = JSON.parse(await Deno.readTextFile(p[0])) as Backup;
@@ -394,7 +446,7 @@ async function main(): Promise<void> {
         `Restored ${data.scopes.length} scopes, ${data.members.length} members, ` +
           `${data.grants.length} grants, ${data.memories.length} memories, ${data.threads?.length ?? 0} threads, ${
             data.memoryLinks?.length ?? 0
-          } memory links, ${data.memoryClaims?.length ?? 0} memory claims`,
+          } memory links, ${data.memoryClaims?.length ?? 0} memory claims, ${data.boardUsage?.length ?? 0} usage rows`,
       );
     }
   } finally {

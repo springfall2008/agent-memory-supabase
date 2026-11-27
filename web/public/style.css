@@ -876,3 +876,21 @@ button.danger {
   max-height: 10em;
   overflow: auto;
 }
+
+/* ── token usage ───────────────────────────────────────────────── */
+
+.status-strip .tokens {
+  color: var(--muted);
+}
+
+.drawer-tokens {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.drawer-tokens-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}

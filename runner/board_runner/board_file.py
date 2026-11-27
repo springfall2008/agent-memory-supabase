@@ -55,11 +55,13 @@ class BoardFile:
     max_turns: int
     max_budget_usd: float | None
     worker_timeout_minutes: int
+    # An env file holding AGENT_MEMORY_TOKEN and WEB_API_URL for sending token usage; a path, never the secret.
+    usage_env_file: Path | None = None
 
 
 _TOP_KEYS = {
     "board", "scope", "workspace", "goal", "done_when", "rules",
-    "max_open_intents", "claim_minutes", "max_intents", "measure", "lead", "worker", "permissions",
+    "max_open_intents", "claim_minutes", "max_intents", "measure", "lead", "worker", "permissions", "usage_env_file",
 }
 _MEASURE_KEYS = {"command", "pass_exit_code", "timeout_minutes", "exclusive"}
 _LEAD_KEYS = {"model", "round_every_minutes", "ideas_model"}
@@ -193,4 +195,5 @@ def load_board_file(path: Path) -> BoardFile:
         max_turns=_int(permissions, "max_turns", 200, "permissions."),
         max_budget_usd=budget,
         worker_timeout_minutes=worker_timeout,
+        usage_env_file=Path(_text(data, "usage_env_file")).expanduser() if "usage_env_file" in data else None,
     )

@@ -30,6 +30,7 @@ function onBoardSelect(id) {
     nameOf: (other) => board.nameOf(other),
     nodes: () => board.nodes(),
     progressText: () => board.progressText(),
+    usage: () => board.usage(),
     // Only a board view writes: a tag view has no one board to add to.
     ...(shown ? { scope: shown.scope, status: () => board.status(), pollNow: () => board.pollNow() } : {}),
   });

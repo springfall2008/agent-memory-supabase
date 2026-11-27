@@ -11,6 +11,7 @@ import {
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
 import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
+import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
 import { parseTranscript } from '../../web/public/transcript.js';
 import { connState, nextDelay, POLL_MS, STALE_MS } from '../../web/public/poll.js';
 import { boardStatus, parseStatus } from '../../web/public/status.js';
@@ -117,6 +118,7 @@ Deno.test('workerLabel falls back to the claim session, then the claim descripti
 
 type Node = {
   id: string;
+  updatedAt?: string;
   scope: string;
   category: string;
   tags: string[];
@@ -154,6 +156,14 @@ Deno.test('diffGraph sees tags, snippet and superseded changes', () => {
     node('c', { superseded: true }),
   );
   assertEquals(diffGraph(prev, next).changed, ['a', 'b', 'c']);
+});
+
+Deno.test('diffGraph sees a content edit below the snippet through updatedAt', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const prev = graph(node('a', { updatedAt: at }), node('b'));
+  const next = graph(node('a', { updatedAt: '2026-01-01T00:00:05.000Z' }), node('b'));
+  assertEquals(diffGraph(prev, next).changed, ['a']);
+  assertEquals(diffGraph(prev, graph(node('a', { updatedAt: at }), node('b'))).changed, []);
 });
 
 Deno.test('diffGraph sees a claim appear, disappear or move', () => {
@@ -816,4 +826,40 @@ Deno.test('clampDrawerWidth keeps the drawer wide enough and leaves room for the
 Deno.test('parseStoredWidth reads only a positive whole number of pixels', () => {
   assertEquals(parseStoredWidth('640'), 640);
   for (const bad of [null, '', 'abc', '0', '-5', '12.5', '1e3', ' 640']) assertEquals(parseStoredWidth(bad), null);
+});
+
+Deno.test('formatTokens shortens with k and M, one decimal under ten', () => {
+  assertEquals(
+    [0, 999, 1000, 1234, 12345, 999_999, 1_234_567, 12_345_678].map(formatTokens),
+    ['0', '999', '1.0k', '1.2k', '12k', '1.0M', '1.2M', '12M'],
+  );
+});
+
+Deno.test('stripText counts cache in the input; zero says none yet; the title is exact', () => {
+  const total = { input: 1000, output: 310_000, cacheRead: 11_000_000, cacheWrite: 1_400_000 };
+  assertEquals(inputTotal(total), 12_401_000);
+  assertEquals(stripText(total), 'Tokens 12M in · 310k out');
+  assertEquals(stripText({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), 'Tokens: none yet');
+  assertEquals(
+    totalTitle(total),
+    'Input 1,000 · cache read 11,000,000 · cache write 1,400,000 · output 310,000 (raw tokens, no costs)',
+  );
+});
+
+Deno.test('runsFor matches an intent by id, a fact by its worker label, the goal to the lead', () => {
+  const t = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 };
+  const run = (runLabel: string, role: string, intentId: string | null) => ({ runLabel, role, intentId, tokens: t });
+  const runs = [
+    run('board-b-0a1b', 'worker', 'i1'),
+    run('board-b-lead-9f9f', 'lead', null),
+    run('board-b-0c0c', 'worker', null),
+  ];
+  assertEquals(runsFor(runs, { id: 'i1', tags: ['kind:intent'] }).map((r) => r.runLabel), ['board-b-0a1b']);
+  assertEquals(
+    runsFor(runs, { id: 'f1', tags: ['kind:fact'], content: 'Found: x\nBy: board-b-0c0c' }).map((r) => r.runLabel),
+    ['board-b-0c0c'],
+  );
+  assertEquals(runsFor(runs, { id: 'g', tags: ['kind:goal'] }).map((r) => r.runLabel), ['board-b-lead-9f9f']);
+  assertEquals(runsFor(runs, { id: 'h', tags: ['kind:hint'] }), []);
+  assertEquals(runsFor(runs, { id: 'f2', tags: ['kind:fact'], content: 'no label' }), []);
 });
