@@ -7,7 +7,7 @@ import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 import { commitOf, githubCommitUrl } from './commits.js';
-import { parsePatch } from './diffparse.js';
+import { openCards, parsePatch } from './diffparse.js';
 import { clampDrawerWidth, DRAWER_MIN, KEY_STEP, parseStoredWidth, WIDTH_KEY } from './resize.js';
 import { formatTokens, inputTotal, runsFor } from './usage.js';
 
@@ -307,6 +307,8 @@ export async function openDrawer(id, ctx) {
 
 /** A file with more rows than this starts folded: open it from its header. */
 const FOLD_ROWS = 400;
+/** Rows drawn when the diff opens, across all files; later files start folded so a large diff stays responsive. */
+const ROW_BUDGET = 3000;
 
 /** @typedef {'commit' | 'main'} DiffView */
 /** @typedef {'3' | '10' | 'all'} DiffContext */
@@ -365,7 +367,7 @@ function diffPanel(board, commit, my, first) {
     message.textContent = body.truncated
       ? 'Cut short: the diff is larger than 2 MB, so the last file is incomplete.'
       : '';
-    out.replaceChildren(...splitDiff(body.text));
+    out.replaceChildren(...splitDiff(body.text, body.truncated === true));
   }
 
   for (const [k, b] of Object.entries(views)) {
@@ -393,10 +395,12 @@ function diffPanel(board, commit, my, first) {
 /**
  * The patch as GitHub's split view: the head text (message, commit list, stat), then a card per file.
  * @param {string} text
+ * @param {boolean} truncated the server cut the text short
  * @returns {HTMLElement[]}
  */
-function splitDiff(text) {
-  const { head, files } = parsePatch(text);
+function splitDiff(text, truncated) {
+  const { head, files } = parsePatch(text, truncated);
+  const open = openCards(files, FOLD_ROWS, ROW_BUDGET);
   const nodes = [];
   if (head.trim()) nodes.push(h('pre', 'diff-head-text', head));
   if (files.length === 0) nodes.push(h('p', 'drawer-message', 'No file changes.'));
@@ -407,17 +411,20 @@ function splitDiff(text) {
       h('p', 'diff-summary', `${files.length} file${files.length === 1 ? '' : 's'} changed, +${adds} −${dels}`),
     );
   }
-  for (const f of files) nodes.push(fileCard(f));
+  files.forEach((f, i) => nodes.push(fileCard(f, open[i])));
   return nodes;
 }
 
-/** @param {import('./diffparse.js').DiffFile} f */
-function fileCard(f) {
+/**
+ * @param {import('./diffparse.js').DiffFile} f
+ * @param {boolean} startOpen
+ */
+function fileCard(f, startOpen) {
   const card = h('section', 'diff-card');
   const header = h('button', 'diff-card-head');
   header.setAttribute('type', 'button');
   const rows = f.hunks.reduce((n, hk) => n + hk.rows.length + 1, 0);
-  let open = rows <= FOLD_ROWS;
+  let open = startOpen;
   const arrow = h('span', 'diff-arrow', open ? '▾' : '▸');
   const path = f.status === 'renamed' && f.oldPath !== f.newPath
     ? `${f.oldPath} → ${f.newPath}`

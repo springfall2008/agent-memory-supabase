@@ -40,19 +40,100 @@ export function wordParts(a, b) {
   return [parts(a), parts(b)];
 }
 
+const ESCAPES =
+  /** @type {Record<string, number>} */ ({ a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 });
+
+/**
+ * A path as git writes it: plain, or C-quoted when it holds a quote, a backslash, a control character or non-ASCII
+ * (`core.quotePath`), with octal escapes for each UTF-8 byte. Returns it unquoted.
+ * @param {string} p
+ */
+export function unquotePath(p) {
+  if (p.length < 2 || !p.startsWith('"') || !p.endsWith('"')) return p;
+  const bytes = [];
+  const enc = new TextEncoder();
+  for (let i = 1; i < p.length - 1; i++) {
+    const c = p[i];
+    if (c !== '\\') {
+      bytes.push(...enc.encode(c));
+      continue;
+    }
+    const next = p[i + 1] ?? '';
+    const oct = /^[0-7]{3}/.exec(p.slice(i + 1, i + 4));
+    if (oct) {
+      bytes.push(parseInt(oct[0], 8));
+      i += 3;
+    } else if (next in ESCAPES) {
+      bytes.push(ESCAPES[next]);
+      i += 1;
+    } else bytes.push(92);
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/**
+ * The first path token of `s` (quoted or up to the next space) and the rest after one space.
+ * @param {string} s
+ * @returns {[string, string]}
+ */
+function token(s) {
+  if (s.startsWith('"')) {
+    let i = 1;
+    while (i < s.length && s[i] !== '"') i += s[i] === '\\' ? 2 : 1;
+    return [s.slice(0, i + 1), s.slice(i + 2)];
+  }
+  return [s, ''];
+}
+
+/**
+ * The old and new paths of a `diff --git a/x b/y` line, quoted or not.
+ * @param {string} rest the line after `diff --git `
+ * @returns {[string | null, string | null]}
+ */
+function headerPaths(rest) {
+  if (rest.startsWith('"')) {
+    const [a, after] = token(rest);
+    return [pathOf(a), pathOf(after)];
+  }
+  const m = /^a\/(.*) b\/(.*)$/.exec(rest);
+  if (m) return [m[1], m[2]];
+  const [a, b] = rest.split(' "b/');
+  return b === undefined ? [null, null] : [pathOf(a), pathOf(`"b/${b}`)];
+}
+
 /** @param {string} p a path from a `---`/`+++` line, `/dev/null` meaning none */
 function pathOf(p) {
   if (p === '/dev/null') return null;
-  return p.startsWith('a/') || p.startsWith('b/') ? p.slice(2) : p;
+  const u = unquotePath(p);
+  return u.startsWith('a/') || u.startsWith('b/') ? u.slice(2) : u;
+}
+
+/**
+ * Which file cards start open: each under `perFile` rows, while the running total stays within `budget`, so a
+ * whole-file diff of many files does not render every row at once.
+ * @param {DiffFile[]} files
+ * @param {number} perFile
+ * @param {number} budget
+ * @returns {boolean[]}
+ */
+export function openCards(files, perFile, budget) {
+  let total = 0;
+  return files.map((f) => {
+    const rows = f.hunks.reduce((n, hk) => n + hk.rows.length + 1, 0);
+    const open = rows <= perFile && total + rows <= budget;
+    if (open) total += rows;
+    return open;
+  });
 }
 
 /**
  * Split git's `show` or `diff` output into what comes before the first file (message, commit list, stat) and the files.
  * Never throws: an unknown line is skipped, and a file whose last hunk is cut short is marked `incomplete`.
  * @param {string} text
+ * @param {boolean} [truncated] the server cut the text: the last file is incomplete wherever the cut fell
  * @returns {{ head: string; files: DiffFile[] }}
  */
-export function parsePatch(text) {
+export function parsePatch(text, truncated = false) {
   const lines = text.split('\n');
   const headLines = [];
   /** @type {DiffFile[]} */
@@ -91,10 +172,10 @@ export function parsePatch(text) {
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
       endFile();
-      const m = /^diff --git a\/(.*) b\/(.*)$/.exec(line);
+      const [oldPath, newPath] = headerPaths(line.slice('diff --git '.length));
       file = {
-        oldPath: m ? m[1] : null,
-        newPath: m ? m[2] : null,
+        oldPath,
+        newPath,
         status: 'modified',
         adds: 0,
         dels: 0,
@@ -151,15 +232,16 @@ export function parsePatch(text) {
     else if (line.startsWith('deleted file mode')) file.status = 'deleted';
     else if (line.startsWith('rename from ')) {
       file.status = 'renamed';
-      file.oldPath = line.slice('rename from '.length);
+      file.oldPath = unquotePath(line.slice('rename from '.length));
     } else if (line.startsWith('rename to ')) {
       file.status = 'renamed';
-      file.newPath = line.slice('rename to '.length);
+      file.newPath = unquotePath(line.slice('rename to '.length));
     } else if (line.startsWith('Binary files ')) file.status = 'binary';
     else if (line.startsWith('--- ')) file.oldPath = pathOf(line.slice(4));
     else if (line.startsWith('+++ ')) file.newPath = pathOf(line.slice(4));
   }
   endFile();
+  if (truncated && files.length) files[files.length - 1].incomplete = true;
   // A trailing newline in git's output leaves one empty line that is not part of the head.
   while (headLines.length && headLines[headLines.length - 1] === '') headLines.pop();
   return { head: headLines.join('\n'), files };

@@ -10,7 +10,7 @@ import {
   progressFields,
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
-import { parsePatch, wordParts } from '../../web/public/diffparse.js';
+import { openCards, parsePatch, unquotePath, wordParts } from '../../web/public/diffparse.js';
 import { commitOf, githubCommitUrl } from '../../web/public/commits.js';
 import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
 import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
@@ -1001,4 +1001,48 @@ Deno.test('wordParts marks only the changed middle of a pair', () => {
     [{ text: 'x =', changed: false }, { text: '1', changed: true }],
     [{ text: 'x =', changed: false }, { text: ' 1;', changed: true }],
   ]);
+});
+
+Deno.test('parsePatch marks the last file incomplete when the server cut the text, wherever the cut fell', () => {
+  const betweenHunks = ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1 +1 @@', '-a', '+b'].join('\n');
+  assertEquals(parsePatch(betweenHunks).files[0].incomplete, false);
+  assertEquals(parsePatch(betweenHunks, true).files[0].incomplete, true);
+  const inHeader = ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1 +1 @@', '-a', '+b', 'diff --git a/y b/y', 'ind']
+    .join('\n');
+  const files = parsePatch(inHeader, true).files;
+  assertEquals(files.map((f) => f.incomplete), [false, true]);
+});
+
+Deno.test('unquotePath reads git quoted paths, octal escapes as UTF-8', () => {
+  assertEquals(unquotePath('"b/caf\\303\\251.txt"'), 'b/café.txt');
+  assertEquals(unquotePath('"a/qu\\"ote.txt"'), 'a/qu"ote.txt');
+  assertEquals(unquotePath('"a/back\\\\slash\\ttab"'), 'a/back\\slash\ttab');
+  assertEquals(unquotePath('a/plain.txt'), 'a/plain.txt');
+});
+
+Deno.test('parsePatch shows quoted paths unquoted, in headers, ---/+++ and renames', () => {
+  const text = [
+    'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"',
+    'index 1..2 100644',
+    '--- "a/caf\\303\\251.txt"',
+    '+++ "b/caf\\303\\251.txt"',
+    '@@ -1 +1 @@',
+    '-a',
+    '+b',
+    'diff --git "a/qu\\"ote" "b/new \\"name\\""',
+    'similarity index 100%',
+    'rename from "qu\\"ote"',
+    'rename to "new \\"name\\""',
+  ].join('\n');
+  const files = parsePatch(text).files;
+  assertEquals(files.map((f) => [f.oldPath, f.newPath]), [['café.txt', 'café.txt'], ['qu"ote', 'new "name"']]);
+});
+
+Deno.test('openCards opens files until a total row budget, and never one over the per-file limit', () => {
+  const f = (rows: number) => ({ hunks: [{ rows: Array.from({ length: rows - 1 }) }] });
+  assertEquals(openCards([f(100), f(500), f(100)] as never, 400, 3000), [true, false, true]);
+  // 300 files of 300 rows: the first ten fit in 3,000 rows, the rest start folded
+  const many = openCards(Array.from({ length: 300 }, () => f(300)) as never, 400, 3000);
+  assertEquals(many.filter(Boolean).length, 10);
+  assertEquals(many.slice(0, 10).every(Boolean), true);
 });
