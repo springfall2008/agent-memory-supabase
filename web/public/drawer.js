@@ -6,6 +6,7 @@ import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdic
 import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
+import { clampDrawerWidth, DRAWER_MIN, KEY_STEP, parseStoredWidth, WIDTH_KEY } from './resize.js';
 import { formatTokens, inputTotal, runsFor } from './usage.js';
 
 /**
@@ -83,7 +84,7 @@ function build() {
   }
   bar.append(tabs.memory, tabs.links, tabs.log);
   body.append(panels.memory, panels.links, panels.log);
-  root.append(head, bar, body);
+  root.append(resizer(root), head, bar, body);
   (document.querySelector('main') ?? document.body).append(root);
 
   document.addEventListener('keydown', (e) => {
@@ -99,6 +100,97 @@ function build() {
     closeDrawer();
   });
   return { root, title, tabs, panels };
+}
+
+/** localStorage, or null where the browser refuses it (private mode, blocked storage). */
+function storage() {
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The drawer's left edge, which drags to change its width. Arrow keys move it too, a double-click goes back to the
+ * default width, and the chosen width is kept for the next visit.
+ * @param {HTMLElement} root the drawer
+ */
+function resizer(root) {
+  const grip = h('div', 'drawer-resize');
+  grip.setAttribute('role', 'separator');
+  grip.setAttribute('aria-orientation', 'vertical');
+  grip.setAttribute('aria-label', 'Resize the details panel');
+  grip.tabIndex = 0;
+  grip.title = 'Drag to resize. Double-click for the default width.';
+  /** The width the person chose, or null for the default. */
+  let chosen = parseStoredWidth(storage()?.getItem(WIDTH_KEY) ?? null);
+  const total = () => (root.parentElement ?? document.body).clientWidth;
+
+  function apply() {
+    if (chosen === null) {
+      root.style.removeProperty('width');
+      root.style.removeProperty('min-width');
+    } else {
+      // The stylesheet's minimum is for the default width; a chosen one has its own limits.
+      root.style.minWidth = '0';
+      root.style.width = `${clampDrawerWidth(chosen, total())}px`;
+    }
+    grip.setAttribute('aria-valuemin', String(DRAWER_MIN));
+    grip.setAttribute('aria-valuemax', String(clampDrawerWidth(Infinity, total())));
+    grip.setAttribute('aria-valuenow', String(Math.round(root.getBoundingClientRect().width)));
+  }
+
+  /** @param {number | null} px */
+  function choose(px) {
+    chosen = px === null ? null : clampDrawerWidth(px, total());
+    apply();
+    try {
+      if (chosen === null) storage()?.removeItem(WIDTH_KEY);
+      else storage()?.setItem(WIDTH_KEY, String(chosen));
+    } catch {
+      // A full or blocked store only means the width is not kept for next time.
+    }
+  }
+
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (!grip.hasPointerCapture(e.pointerId)) return;
+    chosen = clampDrawerWidth(root.getBoundingClientRect().right - e.clientX, total());
+    apply();
+  });
+  /** @param {PointerEvent} e */
+  const end = (e) => {
+    if (!grip.hasPointerCapture(e.pointerId)) return;
+    grip.releasePointerCapture(e.pointerId);
+    document.body.classList.remove('resizing');
+    choose(chosen);
+  };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  grip.addEventListener('lostpointercapture', () => document.body.classList.remove('resizing'));
+  grip.addEventListener('dblclick', () => choose(null));
+  grip.addEventListener('keydown', (e) => {
+    // The drawer is on the right, so moving its edge left makes it wider.
+    const step = { ArrowLeft: KEY_STEP, ArrowRight: -KEY_STEP }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    choose(root.getBoundingClientRect().width + step);
+  });
+  // A smaller window shrinks a chosen width to fit; the choice itself stays for a wider one.
+  globalThis.addEventListener('resize', () => {
+    if (!root.hidden) apply();
+  });
+  // Opening the drawer draws the chosen width and the separator's numbers.
+  new MutationObserver(() => {
+    if (!root.hidden) apply();
+  }).observe(root, { attributes: true, attributeFilter: ['hidden'] });
+  return grip;
 }
 
 /** @param {TabName} k */
