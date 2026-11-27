@@ -665,10 +665,6 @@ main {
   gap: 6px 8px;
 }
 
-.controls-buttons .note {
-  margin: 0;
-}
-
 .write-status {
   margin: 0;
   font-size: 13px;

@@ -1,5 +1,5 @@
-// Sending one write from the toolbar or the drawer: its controls disabled while in flight, a status line saying what happened, and
-// an immediate graph poll once it lands.
+// Sending one write from the toolbar or the drawer: its controls disabled while in flight, a status line saying what
+// happened, and an immediate graph poll once it lands.
 import { ApiError, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
 

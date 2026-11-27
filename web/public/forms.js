@@ -51,8 +51,8 @@ function textField(label, opts) {
 }
 
 /**
- * A form box: an optional title, its fields, an optional note, a submit button and a status line. `body` gives the request
- * body from the trimmed values, or a reason to send nothing.
+ * A form box: an optional title, its fields, an optional note, a submit button and a status line. `body` gives the
+ * request body from the trimmed values, or a reason to send nothing.
  * @param {{
  *   title?: string;
  *   fields: { el: HTMLElement; input: HTMLInputElement | HTMLTextAreaElement }[];

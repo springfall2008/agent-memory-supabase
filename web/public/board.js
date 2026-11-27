@@ -294,8 +294,13 @@ export function mountBoard(el, opts) {
     me.conn = ok ? 'live' : 'retrying';
     if (ok) me.error = null;
     me.delay = nextDelay(me.delay, ok);
-    renderStrip(me);
-    if (ok) opts.onPoll?.();
+    // A throw in the strip, the toolbar or the poll hook must not stop the loop or leave `pollNow` waiters hanging.
+    try {
+      renderStrip(me);
+      if (ok) opts.onPoll?.();
+    } catch {
+      console.error('Board strip update failed');
+    }
     // A write landed while this poll was in flight, so it may predate the write: poll again at once.
     const again = me.again;
     me.again = false;

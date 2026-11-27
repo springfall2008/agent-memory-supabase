@@ -260,6 +260,8 @@ function session(scope, name, outer, limit, board) {
   // ── intent limit, in the strip ───────────────────────────────────
 
   function drawLimit() {
+    // A poll that shows a state with no limit to edit closes an open editor, unless its value is being saved.
+    if (editing && !saving && !(live && known && toolbarOffers(state).limit)) editing = false;
     if (editing) return;
     limitPrefix.textContent = `Intents ${intents} of `;
     const text = maxText(max);
@@ -295,7 +297,8 @@ function session(scope, name, outer, limit, board) {
       if (!saving) endEdit(true);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (saving || limitInput.disabled) return;
+      // A held Enter repeats: it must not open the editor from the button and then save it.
+      if (e.repeat || saving || limitInput.disabled) return;
       const v = parseLimit(limitInput.value);
       if (!v.ok) {
         say(line, 'error', v.error);

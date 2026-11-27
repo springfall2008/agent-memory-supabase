@@ -238,10 +238,10 @@ A form is disabled while its request is in flight. On success it clears, says "A
 shortly" and polls the graph at once. On failure it shows the server's error. If the board is over 400 nodes, the page
 warns that what you add may not appear.
 
-- **Hints.** A hint is advice for the lead, read at its next round. From the toolbar it applies to the whole board.
+- **+ Hint.** A hint is advice for the lead, read at its next round. From the toolbar it applies to the whole board.
   From "Hint about this node" on an intent, fact or hint it links to that node; on a conclusion, progress, rules or
   amendment node it links to nothing and applies to the whole board. A hint is allowed in any board state.
-- **Intents**, while the board is running or paused. Write what a worker should try, and optionally "Done when" and
+- **+ Intent**, while the board is running or paused. Write what a worker should try, and optionally "Done when" and
   "Give up when". Left empty, they become "a fact reporting what trying this showed" and "it cannot be done within the
   board's rules; record an inconclusive fact". From "Try next from this fact", the intent is linked `derived-from`
   that fact. The form shows how many intents the board has used out of `Max intents`. A person's intent is accepted
