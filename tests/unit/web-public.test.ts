@@ -10,6 +10,7 @@ import {
   progressFields,
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
+import { parsePatch, wordParts } from '../../web/public/diffparse.js';
 import { commitOf, githubCommitUrl } from '../../web/public/commits.js';
 import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
 import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
@@ -891,4 +892,113 @@ Deno.test('githubCommitUrl needs an owner/name repo', () => {
     assertEquals(githubCommitUrl(bad, 'faf6fed5'), null, String(bad));
   }
   assertEquals(githubCommitUrl('a/b', 'not-hex'), null);
+});
+
+// ── side-by-side diff ──────────────────────────────────────────────
+
+const MODIFIED = [
+  'commit faf6fed5',
+  '',
+  '    a message',
+  '---',
+  ' x.py | 2 +-',
+  '',
+  'diff --git a/x.py b/x.py',
+  'index 1..2 100644',
+  '--- a/x.py',
+  '+++ b/x.py',
+  '@@ -10,4 +10,5 @@ def f():',
+  ' keep',
+  '-old one',
+  '-old two',
+  '+new one',
+  '+new two',
+  '+new three',
+  ' tail',
+  '\\ No newline at end of file',
+  '',
+].join('\n');
+
+Deno.test('parsePatch puts the message and stat in head, and numbers both sides from the hunk header', () => {
+  const { head, files } = parsePatch(MODIFIED);
+  assert(head.includes('a message') && head.includes('x.py | 2 +-'));
+  assertEquals(files.length, 1);
+  const f = files[0];
+  assertEquals([f.oldPath, f.newPath, f.status, f.adds, f.dels, f.incomplete], [
+    'x.py',
+    'x.py',
+    'modified',
+    3,
+    2,
+    false,
+  ]);
+  assertEquals(f.hunks[0].header, '@@ -10,4 +10,5 @@ def f():');
+  const rows = f.hunks[0].rows;
+  assertEquals(rows.length, 5);
+  assertEquals(rows[0].left?.n, 10);
+  assertEquals(rows[0].right?.n, 10);
+  assertEquals([rows[0].left?.text, rows[0].right?.text, rows[0].left?.kind], ['keep', 'keep', 'context']);
+  // two removed and three added lines pair as two rows, then one add alone
+  assertEquals([rows[1].left?.text, rows[1].right?.text], ['old one', 'new one']);
+  assertEquals([rows[2].left?.n, rows[2].right?.n], [12, 12]);
+  assertEquals([rows[3].left, rows[3].right?.text, rows[3].right?.n], [null, 'new three', 13]);
+  assertEquals([rows[4].left?.n, rows[4].right?.n, rows[4].left?.text], [13, 14, 'tail']);
+  assertEquals(rows[1].left?.parts, [{ text: 'old', changed: true }, { text: ' one', changed: false }]);
+});
+
+Deno.test('parsePatch reads new, deleted, renamed and binary files', () => {
+  const text = [
+    'diff --git a/new.txt b/new.txt',
+    'new file mode 100644',
+    'index 0000000..1',
+    '--- /dev/null',
+    '+++ b/new.txt',
+    '@@ -0,0 +1,2 @@',
+    '+one',
+    '+two',
+    'diff --git a/gone.txt b/gone.txt',
+    'deleted file mode 100644',
+    '--- a/gone.txt',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-bye',
+    'diff --git a/old name.py b/new name.py',
+    'similarity index 90%',
+    'rename from old name.py',
+    'rename to new name.py',
+    'diff --git a/img.png b/img.png',
+    'Binary files a/img.png and b/img.png differ',
+  ].join('\n');
+  const files = parsePatch(text).files;
+  assertEquals(files.map((f) => [f.status, f.oldPath, f.newPath, f.adds, f.dels]), [
+    ['added', null, 'new.txt', 2, 0],
+    ['deleted', 'gone.txt', null, 0, 1],
+    ['renamed', 'old name.py', 'new name.py', 0, 0],
+    ['binary', 'img.png', 'img.png', 0, 0],
+  ]);
+  assertEquals(files[0].hunks[0].rows.map((r) => [r.left, r.right?.n]), [[null, 1], [null, 2]]);
+  assertEquals(files[1].hunks[0].rows[0].right, null);
+});
+
+Deno.test('parsePatch marks a file cut short mid-hunk and never throws on junk', () => {
+  const cut = ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,5 +1,5 @@', ' a', '-b'].join('\n');
+  const f = parsePatch(cut).files[0];
+  assertEquals(f.incomplete, true);
+  assertEquals(f.hunks[0].rows.length, 2);
+  assertEquals(parsePatch('').files, []);
+  // Junk before any file header is head text, and a bare 'diff --git' is not a header.
+  assertEquals(parsePatch('@@ nonsense\n+x\ndiff --git').files.length, 0);
+});
+
+Deno.test('wordParts marks only the changed middle of a pair', () => {
+  assertEquals(wordParts('a = 1', 'a = 2'), [
+    [{ text: 'a = ', changed: false }, { text: '1', changed: true }],
+    [{ text: 'a = ', changed: false }, { text: '2', changed: true }],
+  ]);
+  assertEquals(wordParts('same', 'same'), [[{ text: 'same', changed: false }], [{ text: 'same', changed: false }]]);
+  // Common prefix and suffix only: everything between them is the change.
+  assertEquals(wordParts('x =1', 'x = 1;'), [
+    [{ text: 'x =', changed: false }, { text: '1', changed: true }],
+    [{ text: 'x =', changed: false }, { text: ' 1;', changed: true }],
+  ]);
 });
