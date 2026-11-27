@@ -70,7 +70,16 @@ button.secondary {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
+}
+
+/* The logo has a white background: rounded, it reads as an app badge on the dark bar. */
+.brand-icon {
+  display: block;
+  border-radius: 6px;
 }
 
 .tabs {

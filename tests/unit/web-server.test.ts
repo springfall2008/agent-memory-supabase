@@ -107,6 +107,7 @@ async function withRoot(fn: (root: string, outside: string) => Promise<void>): P
     await Deno.writeTextFile(`${root}/style.css`, 'a{}');
     await Deno.writeTextFile(`${root}/data.json`, '{}');
     await Deno.writeTextFile(`${root}/logo.svg`, '<svg/>');
+    await Deno.writeTextFile(`${root}/icon.png`, 'png');
     await Deno.writeTextFile(`${root}/blob.bin`, 'x');
     await Deno.mkdir(`${root}/sub`);
     await Deno.writeTextFile(`${parent}/secret.txt`, 'TOP-SECRET');
@@ -132,6 +133,7 @@ Deno.test('serveStatic sets content types', async () => {
       '/style.css': 'text/css; charset=utf-8',
       '/data.json': 'application/json; charset=utf-8',
       '/logo.svg': 'image/svg+xml',
+      '/icon.png': 'image/png',
       '/blob.bin': 'application/octet-stream',
     };
     for (const [path, type] of Object.entries(types)) {
