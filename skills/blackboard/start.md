@@ -41,6 +41,7 @@ you read with the Read tool. The file is the person's approval: ask nothing.
    - Take `max_open_intents` (default 4), `claim_minutes` (default 60) and `max_intents` (default none).
    - `Measure` is `yes` when the file has a `[measure]` table, otherwise `no`.
    - `Ideas model` is the `[lead]` table's `ideas_model` (default `inherit`).
+   - `Repo` is `repo`, when the file has it.
 2. **Look for the board.** Call `graph` with `tags_all ["board:<project>", "kind:goal"]`, full detail. A `state:paused`
    goal counts as `state:running` in step 4.
 3. **No goal:** write the board as in step 4 above.
@@ -48,11 +49,15 @@ you read with the Read tool. The file is the person's approval: ask nothing.
      the file. `Started:` is today's date, `by board file <file name, without its directory>`.
    - The rules memory holds `rules` exactly as written.
    - End with `BOARD-START created <goal id>`.
-4. **The goal is `state:running`:** write nothing. Compare the file's goal, Done when and rules with the memories. List
-   each one that differs, in a line or two. End with `BOARD-START exists`.
+4. **The goal is `state:running`:** write nothing, with one exception. Compare the file's goal, Done when and rules with
+   the memories. List each one that differs, in a line or two. End with `BOARD-START exists`.
+   - The exception: when the file has `repo` and the goal has no `Repo:` line, `update` the goal with its content plus
+     one line, `Repo: <repo>`, after its `Ideas model:` line (or at the end when there is none). Change no other byte;
+     keep its tags. Say that you added it. A `Repo:` line that is already there is never changed.
 5. **The goal is `state:stopped`, its conclusion contains `Stopped: intent limit`, and the file's `max_intents` is
    higher than the goal's `Max intents`, or is absent:** follow SKILL.md's `resume` with that limit. End with
-   `BOARD-START resumed`. This is the only change `from=` ever makes to an existing board.
+   `BOARD-START resumed`. Apart from the `Repo:` line in step 4, this is the only change `from=` ever makes to an
+   existing board.
 6. **Otherwise** (done, stopped for another reason, or a limit that isn't higher): say why, write nothing, and end with
    `BOARD-START not-running`.
 
@@ -68,6 +73,7 @@ Max intents: <n, or none>
 Claim minutes: <n>
 Measure: <yes if a measurement must confirm the goal before it is concluded, otherwise no>
 Ideas model: <the model of the sub-agent the lead asks for ideas when stuck: inherit, a model name, or none>
+Repo: <the GitHub repository as owner/name; only when the board file names one>
 Started: <ISO date> by <the person>
 ```
 
