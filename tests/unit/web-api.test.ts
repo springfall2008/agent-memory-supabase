@@ -927,3 +927,18 @@ Deno.test("POST /usage/delete deletes a board's rows; GET is not allowed", async
   assertEquals(g.status, 405);
   await g.json();
 });
+
+Deno.test('POST /usage answers 404 and 403 for scope errors, so the runner keeps the row and retries', async () => {
+  for (const [message, status] of [["Scope 's1' not found", 404], ["No write access to scope 's1'", 403]] as const) {
+    const u = new UsageFake();
+    u.record = () => Promise.reject(new StoreError(message));
+    const r = await post(new Fake(), '/usage', ROW, 'application/json', u);
+    assertEquals(r.status, status, message);
+    assertEquals(await r.json(), { error: message });
+  }
+  const u = new UsageFake();
+  u.record = () => Promise.reject(new StoreError('Role must be worker, lead, start or release'));
+  const r = await post(new Fake(), '/usage', ROW, 'application/json', u);
+  assertEquals(r.status, 400, 'a row the database refuses for its content stays a 400');
+  await r.json();
+});

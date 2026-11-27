@@ -293,5 +293,5 @@ Deno.test('/usage records a run and reads it back with the board total', () =>
     assertEquals(read.body.total, { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 });
     assertEquals(read.body.runs[0].runLabel, 'board-toy-usage-0001');
     const refused = await call(w.ro.id, '/usage', body);
-    assertEquals([refused.status, refused.body.error], [400, `No write access to scope '${w.alpha.name}'`]);
+    assertEquals([refused.status, refused.body.error], [403, `No write access to scope '${w.alpha.name}'`]);
   }));

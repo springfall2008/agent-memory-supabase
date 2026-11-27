@@ -388,7 +388,17 @@ function usageRowOf(b: Body): UsageRow {
 
 async function recordUsage(req: Request, _store: WebStore, usage: UsageStore): Promise<Response> {
   const row = usageRowOf(await jsonBody(req));
-  return Response.json({ id: await usage.record(row) }, { status: 201 });
+  try {
+    return Response.json({ id: await usage.record(row) }, { status: 201 });
+  } catch (e) {
+    // The runner drops a row on 400 (it can never succeed) and retries anything else. A scope the token cannot reach
+    // yet may become writable, so say 404 or 403 rather than 400.
+    // Plain string tests: the edge runtime's parser fails on a regex literal holding a quote here.
+    const m = e instanceof StoreError ? e.message : '';
+    if (m.startsWith("Scope '") && m.endsWith("' not found")) throw new Refusal(404, m);
+    if (m.startsWith('No write access to scope ')) throw new Refusal(403, m);
+    throw e;
+  }
 }
 
 async function deleteUsage(req: Request, _store: WebStore, usage: UsageStore): Promise<Response> {
