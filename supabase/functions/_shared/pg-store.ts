@@ -620,7 +620,7 @@ export class PgMemoryStore implements MemoryStore {
       const scopeIds = await this.resolveScopeIds(tx, f.scopes);
       if (scopeIds.length === 0) return { nodes: [], edges: [], truncated: false, total: 0 };
       const rows = await tx<Row[]>`
-        select id, scope, category, tags, content, created_at, count(*) over () as total
+        select id, scope, category, tags, content, created_at, updated_at, count(*) over () as total
         from agent_memory.memory_view
         where scope_id = any(${scopeIds}::uuid[])
           and (${f.category ?? null}::text is null or category = ${f.category ?? null}::text)
@@ -639,6 +639,7 @@ export class PgMemoryStore implements MemoryStore {
           tags: r.tags,
           createdAt: iso(r.created_at),
         };
+        if (f.withUpdatedAt) n.updatedAt = iso(r.updated_at);
         if (full) n.content = r.content;
         else n.snippet = snippet(r.content, GRAPH_SNIPPET_CHARS);
         return n;
