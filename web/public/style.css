@@ -1022,10 +1022,12 @@ button.danger {
   margin: 6px 8px;
 }
 
+/* As wide as the longest line, at least the card: lines keep their layout and the card scrolls sideways. */
 .diff-split {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
   font-family: ui-monospace, monospace;
   font-size: 12px;
   line-height: 1.45;
@@ -1036,16 +1038,19 @@ button.danger {
   vertical-align: top;
 }
 
+.diff-col-n {
+  width: 1%;
+}
+
 .diff-n {
-  width: 3.5em;
+  white-space: nowrap;
   color: var(--muted);
   text-align: right;
   user-select: none;
 }
 
 .diff-code {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
 }
 
 .diff-code.diff-left {
@@ -1078,6 +1083,7 @@ button.danger {
   padding: 2px 8px;
   background: rgb(59 130 246 / 12%);
   color: var(--accent);
+  white-space: pre;
 }
 
 /* "Full width" on the Diff tab: wider than any dragged width, leaving the graph its minimum. */

@@ -461,6 +461,11 @@ function fileCard(f, startOpen) {
 /** @param {import('./diffparse.js').DiffFile} f */
 function splitTable(f) {
   const table = h('table', 'diff-split');
+  // Explicit columns: narrow line numbers and code as wide as its longest line. Without them the spanning hunk row
+  // would set four equal columns.
+  const cols = h('colgroup');
+  cols.append(h('col', 'diff-col-n'), h('col', 'diff-col-code'), h('col', 'diff-col-n'), h('col', 'diff-col-code'));
+  table.append(cols);
   const tbody = h('tbody');
   for (const hk of f.hunks) {
     const sep = h('tr', 'diff-hunk-row');
