@@ -233,6 +233,10 @@ Intents: <open> open (<claimed> claimed), <done> done, <dropped> dropped
 
 ```
 Conclusion for board <project>: <the answer in one line, or why the goal cannot be met>
+Commit: <sha> on <branch>
 Done when: <the goal's condition>
 Shown by: <each proving fact id and what it contributes>
 ```
+
+Write the `Commit:` line only when the answer is a commit: copy it from the `Commit:` line of the fact that proves the
+goal. Leave it out otherwise. The web UI shows that commit's branch as the board's final change.
