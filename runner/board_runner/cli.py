@@ -319,7 +319,8 @@ class Runner:
         session_id = state.get("lead_session_id")
         resume = bool(session_id)
         session_id = session_id or str(uuid.uuid4())
-        state.update({"lead_label": label, "lead_session_id": session_id})
+        # The local web UI reads the workspace from here to show a fact's commit diff.
+        state.update({"lead_label": label, "lead_session_id": session_id, "workspace": str(self.bf.workspace)})
         self.save_state(state)
         self.lead_label = label
 

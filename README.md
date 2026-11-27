@@ -315,6 +315,20 @@ The log comes from files on this machine, so it needs the board runner to have r
 this worker did not run on this machine", and the rest of the board works as before. The log route accepts only a
 `<board>/<label>` of the shape the runner makes, and never reads outside that board's `workers/` folder.
 
+### Commits
+
+A fact whose worker committed its work carries a `Commit: <sha> on <branch>` line. Its drawer then offers:
+
+- **View on GitHub (if pushed)**, when the board's goal has a `Repo: owner/name` line. Set `repo = "owner/name"` in the
+  board file: `/blackboard start` writes the line into a new board's goal, and adds it to an existing goal that lacks
+  one. Board branches stay local until someone pushes them, so the link shows the commit only after a push (to the repo
+  or a fork).
+- **A Diff tab**, from the board's workspace on this machine, so it needs no push. "This commit" shows `git show`, and
+  "All changes vs main" shows every commit on top of `origin/HEAD` (or `origin/main`, `main`, `master`) and their diff.
+  The board runner records the workspace in its `state.json`; a board whose runner has not been restarted since says
+  so. The `/diff/<board>/<sha>` route accepts only a board name and a hex SHA, runs `git` without a shell, external
+  diff tools or a pager, stops after 10 s and returns at most 2 MB.
+
 ### Later: hosting
 
 The browser code calls `/api/...` only, so a login front door could replace the local proxy later. Worker logs would

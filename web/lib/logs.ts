@@ -38,7 +38,7 @@ function validLabel(board: string, label: string): boolean {
 const isContinuation = (b: number) => (b & 0xc0) === 0x80;
 
 /** Length of the longest prefix of `buf` that does not end inside a UTF-8 sequence. */
-function wholeChars(buf: Uint8Array): number {
+export function wholeChars(buf: Uint8Array): number {
   for (let back = 1; back <= Math.min(4, buf.length); back++) {
     const i = buf.length - back;
     const b = buf[i];

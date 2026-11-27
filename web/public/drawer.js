@@ -1,4 +1,4 @@
-// The detail drawer: one memory, with Memory, Links and Worker log tabs, sliding in over the right of the page.
+// The detail drawer: one memory, with Memory, Links, Worker log and Diff tabs, sliding in over the right of the page.
 import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
 import { h } from './dom.js';
 import { roundOf } from './bands.js';
@@ -6,6 +6,7 @@ import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdic
 import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
+import { commitOf, githubCommitUrl } from './commits.js';
 import { clampDrawerWidth, DRAWER_MIN, KEY_STEP, parseStoredWidth, WIDTH_KEY } from './resize.js';
 import { formatTokens, inputTotal, runsFor } from './usage.js';
 
@@ -22,7 +23,7 @@ import { formatTokens, inputTotal, runsFor } from './usage.js';
  *   usage?: () => import('./usage.js').Run[];
  * }} DrawerCtx `scope`, `status` and `pollNow` come only from the Board tab's board view, and turn on the drawer's
  *   shortcuts and the goal's amendments
- * @typedef {'memory' | 'links' | 'log'} TabName
+ * @typedef {'memory' | 'links' | 'log' | 'diff'} TabName
  * @typedef {import('./names.js').Verdict} Verdict
  */
 
@@ -66,10 +67,12 @@ function build() {
   /** @type {Record<TabName, HTMLElement>} */
   const panels = /** @type {any} */ ({});
   for (
-    const [k, text] of /** @type {[TabName, string][]} */ ([['memory', 'Memory'], ['links', 'Links'], [
-      'log',
-      'Worker log',
-    ]])
+    const [k, text] of /** @type {[TabName, string][]} */ ([
+      ['memory', 'Memory'],
+      ['links', 'Links'],
+      ['log', 'Worker log'],
+      ['diff', 'Diff'],
+    ])
   ) {
     const b = h('button', '', text);
     b.setAttribute('type', 'button');
@@ -82,8 +85,8 @@ function build() {
     panels[k] = h('div', `drawer-panel panel-${k}`);
     panels[k].setAttribute('role', 'tabpanel');
   }
-  bar.append(tabs.memory, tabs.links, tabs.log);
-  body.append(panels.memory, panels.links, panels.log);
+  bar.append(tabs.memory, tabs.links, tabs.log, tabs.diff);
+  body.append(panels.memory, panels.links, panels.log, panels.diff);
   root.append(resizer(root), head, bar, body);
   (document.querySelector('main') ?? document.body).append(root);
 
@@ -197,7 +200,7 @@ function resizer(root) {
 function selectTab(k) {
   if (!ui) return;
   if (ui.tabs[k].hidden) k = 'memory';
-  for (const n of /** @type {TabName[]} */ (['memory', 'links', 'log'])) {
+  for (const n of /** @type {TabName[]} */ (['memory', 'links', 'log', 'diff'])) {
     ui.panels[n].hidden = n !== k;
     ui.tabs[n].setAttribute('aria-selected', String(n === k));
   }
@@ -239,6 +242,8 @@ export async function openDrawer(id, ctx) {
   ui.title.title = id;
   ui.tabs.log.hidden = true;
   ui.panels.log.replaceChildren();
+  ui.tabs.diff.hidden = true;
+  ui.panels.diff.replaceChildren();
   ui.panels.links.replaceChildren();
   ui.panels.memory.replaceChildren(h('p', 'drawer-message', 'Loading…'));
   ui.tabs.links.textContent = 'Links';
@@ -266,6 +271,12 @@ export async function openDrawer(id, ctx) {
   ui.panels.memory.replaceChildren(...memoryPanel(memory, ctx, my));
   ui.panels.links.replaceChildren(...linksPanel(memory, ctx));
   ui.tabs.links.textContent = `Links (${(memory.links?.length ?? 0) + (memory.moreLinks ?? 0)})`;
+  const commit = commitOf(memory.content);
+  const commitBoard = memory.tags.find((t) => t.startsWith('board:'))?.slice(6);
+  if (commit && commitBoard) {
+    ui.tabs.diff.hidden = false;
+    ui.panels.diff.replaceChildren(diffPanel(commitBoard, commit, my));
+  }
   selectTab(wanted);
 
   const label = workerLabel(memory) ?? (kindOf(memory.tags) === 'intent' ? await factLabel(memory) : null);
@@ -288,6 +299,94 @@ export async function openDrawer(id, ctx) {
     ui.panels.log.replaceChildren(log.el);
   }
   selectTab(wanted);
+}
+
+/** Above this many lines a diff is shown as plain text, not one coloured line per element. */
+const DIFF_COLOUR_LINES = 20000;
+
+/**
+ * A fact's commit as a diff from the board's workspace on this machine: the commit alone, or everything on top of the
+ * base branch. The local server reads the workspace from the board runner's state.
+ * @param {string} board
+ * @param {{ sha: string; branch: string | null }} commit
+ * @param {number} my the drawer sequence this panel belongs to
+ */
+function diffPanel(board, commit, my) {
+  const el = h('div', 'diff-panel');
+  const head = h('div', 'diff-head');
+  head.append(h('span', 'diff-sha', commit.sha), commit.branch ? h('span', 'note', ` on ${commit.branch}`) : '');
+  const views = h('div', 'diff-views');
+  const message = h('p', 'drawer-message', 'Loading…');
+  const pre = h('pre', 'diff-text');
+  /** @type {Record<'commit' | 'main', HTMLElement>} */
+  const buttons = {
+    commit: h('button', 'secondary', 'This commit'),
+    main: h('button', 'secondary', 'All changes vs main'),
+  };
+  let view = /** @type {'commit' | 'main'} */ ('commit');
+  let request = 0;
+
+  async function load(/** @type {'commit' | 'main'} */ v) {
+    view = v;
+    for (const [k, b] of Object.entries(buttons)) b.setAttribute('aria-pressed', String(k === view));
+    const mine = ++request;
+    message.hidden = false;
+    message.className = 'drawer-message';
+    message.textContent = 'Loading…';
+    pre.replaceChildren();
+    let body;
+    try {
+      const res = await fetch(`/diff/${encodeURIComponent(board)}/${commit.sha}?view=${v}`);
+      body = await res.json();
+      if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${res.status}`);
+    } catch (e) {
+      if (mine !== request || my !== seq) return;
+      message.className = 'drawer-message error';
+      message.textContent = `${e instanceof Error ? e.message : String(e)}. Diffs come from the board's workspace on ` +
+        'the machine that runs it.';
+      return;
+    }
+    if (mine !== request || my !== seq) return;
+    message.hidden = !body.truncated;
+    message.textContent = body.truncated ? 'Cut short: the diff is larger than 2 MB.' : '';
+    drawDiff(pre, body.text);
+  }
+
+  for (const [k, b] of Object.entries(buttons)) {
+    b.setAttribute('type', 'button');
+    b.addEventListener('click', () => load(/** @type {'commit' | 'main'} */ (k)));
+    views.append(b);
+  }
+  el.append(head, views, message, pre);
+  load('commit');
+  return el;
+}
+
+/**
+ * Draw diff text into `pre`: added lines green, removed red, hunk headers blue. Text only, never HTML.
+ * @param {HTMLElement} pre
+ * @param {string} text
+ */
+function drawDiff(pre, text) {
+  const lines = text.split('\n');
+  if (lines.length > DIFF_COLOUR_LINES) {
+    pre.textContent = text;
+    return;
+  }
+  pre.append(...lines.map((line) => {
+    const cls = line.startsWith('+++') || line.startsWith('---')
+      ? 'diff-file'
+      : line.startsWith('+')
+      ? 'diff-add'
+      : line.startsWith('-')
+      ? 'diff-del'
+      : line.startsWith('@@')
+      ? 'diff-hunk'
+      : line.startsWith('diff --git') || line.startsWith('commit ')
+      ? 'diff-meta'
+      : '';
+    return h('span', cls ? `diff-line ${cls}` : 'diff-line', `${line}\n`);
+  }));
 }
 
 /**
@@ -432,6 +531,18 @@ function memoryPanel(m, ctx, my) {
     out.push(box);
   }
   out.push(h('div', 'drawer-content', m.content));
+  const commit = commitOf(m.content);
+  const url = commit ? githubCommitUrl(ctx.status?.()?.repo ?? null, commit.sha) : null;
+  if (commit && url) {
+    const a = /** @type {HTMLAnchorElement} */ (h('a', 'github-link', 'View on GitHub (if pushed)'));
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = `${commit.sha} on GitHub: it shows once the branch has been pushed`;
+    const line = h('p', 'drawer-github');
+    line.append(a);
+    out.push(line);
+  }
   const runs = ctx.usage ? runsFor(ctx.usage(), m) : [];
   if (runs.length) out.push(tokensBlock(runs));
   const { board, scope, nodes, status, pollNow } = ctx;

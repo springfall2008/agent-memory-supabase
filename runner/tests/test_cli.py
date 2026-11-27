@@ -254,6 +254,13 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(logs)
         self.assertEqual({Path(n).suffix for n in logs}, {".jsonl", ".err"})
 
+    def test_state_records_the_workspace(self):
+        h = self.harness()
+        h.at(5, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        state = json.loads((h.board_dir / "state.json").read_text())
+        self.assertEqual(state["workspace"], str(h.bf.workspace))
+
     def test_finished_worker_leaves_state(self):
         h = self.harness()
         seen = {}

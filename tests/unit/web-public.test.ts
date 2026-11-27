@@ -10,6 +10,7 @@ import {
   progressFields,
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
+import { commitOf, githubCommitUrl } from '../../web/public/commits.js';
 import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
 import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
 import { parseTranscript } from '../../web/public/transcript.js';
@@ -268,13 +269,15 @@ Deno.test('connState says stale once a live loop has not refreshed for three pol
 Deno.test('parseStatus reads round, max intents and best result', () => {
   const goal = 'Goal: x\nMax open intents: 3\nMax intents: 12\nClaim minutes: 5';
   const progress = 'Round: 4\nEstablished: nothing yet.\nBest result: none.\nOpen questions: none.';
-  assertEquals(parseStatus(goal, progress), { round: 4, maxIntents: 12, best: 'none.' });
+  assertEquals(parseStatus(goal, progress), { round: 4, maxIntents: 12, best: 'none.', repo: null });
   assertEquals(parseStatus('Max intents: none', 'Best result:   a faster parser, 2x  '), {
     round: null,
     maxIntents: 'none',
     best: 'a faster parser, 2x',
+    repo: null,
   });
-  assertEquals(parseStatus('Goal: x', ''), { round: null, maxIntents: null, best: null });
+  assertEquals(parseStatus('Goal: x', ''), { round: null, maxIntents: null, best: null, repo: null });
+  assertEquals(parseStatus('Goal: x\nRepo:  springfall2008/batpred ', '').repo, 'springfall2008/batpred');
 });
 
 Deno.test('boardStatus counts drawn intents and reads the goal state with parseStatus', () => {
@@ -290,6 +293,7 @@ Deno.test('boardStatus counts drawn intents and reads the goal state with parseS
     round: 2,
     maxIntents: 5,
     best: null,
+    repo: null,
   });
   assertEquals(boardStatus([], '', '').state, null);
   assertEquals(boardStatus([], '', '').intents, 0);
@@ -862,4 +866,29 @@ Deno.test('runsFor matches an intent by id, a fact by its worker label, the goal
   assertEquals(runsFor(runs, { id: 'g', tags: ['kind:goal'] }).map((r) => r.runLabel), ['board-b-lead-9f9f']);
   assertEquals(runsFor(runs, { id: 'h', tags: ['kind:hint'] }), []);
   assertEquals(runsFor(runs, { id: 'f2', tags: ['kind:fact'], content: 'no label' }), []);
+});
+
+Deno.test('commitOf reads the first Commit: line with a SHA; none or a bare word is no commit', () => {
+  assertEquals(commitOf('Found: x\nCommit: faf6fed5 on board/predbat-memory/e98ecb9f\nBy: w'), {
+    sha: 'faf6fed5',
+    branch: 'board/predbat-memory/e98ecb9f',
+  });
+  const full = 'faf6fed5e12a28bd702f11445ec9c345c2e9212a';
+  assertEquals(commitOf(`Commit: ${full}`), { sha: full, branch: null });
+  assertEquals(commitOf('Commit: faf6fed5 (faf6fed5e12a) on board/x/ab12'), { sha: 'faf6fed5', branch: null });
+  assertEquals(commitOf('Commit: none; branch board/x/a6668d6a stays at 73a64575'), null);
+  assertEquals(commitOf('Commit: FAF6FED5 on b'), null);
+  assertEquals(commitOf('no commit here'), null);
+  assertEquals(commitOf('  Commit: faf6fed5 indented'), null);
+});
+
+Deno.test('githubCommitUrl needs an owner/name repo', () => {
+  assertEquals(
+    githubCommitUrl('springfall2008/batpred', 'faf6fed5'),
+    'https://github.com/springfall2008/batpred/commit/faf6fed5',
+  );
+  for (const bad of [null, '', 'batpred', 'a/b/c', 'https://github.com/a/b', 'own er/x', '-a/b']) {
+    assertEquals(githubCommitUrl(bad, 'faf6fed5'), null, String(bad));
+  }
+  assertEquals(githubCommitUrl('a/b', 'not-hex'), null);
 });

@@ -15,16 +15,18 @@ export function field(text, label) {
 /**
  * @param {string} goal the goal memory's content
  * @param {string} progress the progress memory's content
- * @returns {{ round: number | null; maxIntents: number | 'none' | null; best: string | null }}
+ * @returns {{ round: number | null; maxIntents: number | 'none' | null; best: string | null; repo: string | null }}
  */
 export function parseStatus(goal, progress) {
   const round = field(progress, 'Round');
   const max = field(goal, 'Max intents');
   const best = field(progress, 'Best result');
+  const repo = field(goal, 'Repo');
   return {
     round: round !== null && /^\d+$/.test(round) ? Number(round) : null,
     maxIntents: max === null ? null : max.toLowerCase() === 'none' ? 'none' : /^\d+$/.test(max) ? Number(max) : null,
     best: best === '' ? null : best,
+    repo: repo === '' ? null : repo,
   };
 }
 
@@ -36,6 +38,7 @@ export function parseStatus(goal, progress) {
  *   round: number | null;
  *   maxIntents: number | 'none' | null;
  *   best: string | null;
+ *   repo: string | null;
  * }} BoardStatus
  */
 
