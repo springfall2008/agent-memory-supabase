@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 PUSH_DENY = "Bash(git push*)"
+# A GitHub repository, owner/name: the start recipe writes it into the goal so a commit links to GitHub.
+_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$")
 _BOARD_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -57,11 +59,12 @@ class BoardFile:
     worker_timeout_minutes: int
     # An env file holding AGENT_MEMORY_TOKEN and WEB_API_URL for sending token usage; a path, never the secret.
     usage_env_file: Path | None = None
+    repo: str | None = None
 
 
 _TOP_KEYS = {
     "board", "scope", "workspace", "goal", "done_when", "rules",
-    "max_open_intents", "claim_minutes", "max_intents", "measure", "lead", "worker", "permissions", "usage_env_file",
+    "max_open_intents", "claim_minutes", "max_intents", "measure", "lead", "worker", "permissions", "usage_env_file", "repo",
 }
 _MEASURE_KEYS = {"command", "pass_exit_code", "timeout_minutes", "exclusive"}
 _LEAD_KEYS = {"model", "round_every_minutes", "ideas_model"}
@@ -196,4 +199,14 @@ def load_board_file(path: Path) -> BoardFile:
         max_budget_usd=budget,
         worker_timeout_minutes=worker_timeout,
         usage_env_file=Path(_text(data, "usage_env_file")).expanduser() if "usage_env_file" in data else None,
+        repo=_repo(data),
     )
+
+
+def _repo(data: dict[str, Any]) -> str | None:
+    if "repo" not in data:
+        return None
+    value = _text(data, "repo")
+    if len(value) > 100 or not _REPO.match(value):
+        raise BoardFileError("repo must be a GitHub repository as owner/name, for example springfall2008/batpred")
+    return value

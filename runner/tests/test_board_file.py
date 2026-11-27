@@ -104,6 +104,14 @@ class BoardFileTest(unittest.TestCase):
         self.assertEqual(bf.max_budget_usd, 20)
         self.assertEqual(bf.worker_timeout_minutes, 180)
 
+    def test_repo_is_optional_and_must_be_owner_slash_name(self):
+        self.assertIsNone(load_board_file(self.minimal()).repo)
+        add = lambda line: self.minimal(replace=('rules = "Compute only."', f'rules = "Compute only."\n{line}'))
+        self.assertEqual(load_board_file(add('repo = "springfall2008/batpred"')).repo, "springfall2008/batpred")
+        self.assertRejects(add('repo = "not a repo"'), "repo")
+        self.assertRejects(add(f'repo = "o/{"x" * 99}"'), "repo")
+        self.assertRejects(add("repo = 3"), "repo")
+
     def test_usage_env_file_is_optional_and_expanded(self):
         self.assertIsNone(load_board_file(self.minimal()).usage_env_file)
         bf = load_board_file(self.minimal(replace=('rules = "Compute only."', 'rules = "Compute only."\nusage_env_file = "~/x.env"')))

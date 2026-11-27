@@ -58,8 +58,8 @@ Runner state lives in `~/.board-runner/<board>/`, or under `$BOARD_RUNNER_HOME`:
 - `workers/<slot>-<label>.jsonl` and `.err`, one pair per worker run: the `.jsonl` is the worker's `stream-json`
   transcript, written live, and the newest 200 runs are kept;
 - `measure/<n>.log`, one per measurement;
-- `state.json`, the lead's session and label plus the running workers, used to resume after a restart (a finished worker
-  is removed from it);
+- `state.json`, the lead's session and label, the board's workspace (the web UI shows commit diffs from it) and the
+  running workers, used to resume after a restart (a finished worker is removed from it);
 - the `lead-settings.json` and `oneshot-settings.json` the runner generates.
 
 ## Board file
@@ -80,6 +80,7 @@ TOML. Unknown keys are errors, so a typo is never silently ignored. See `example
 | `[measure] timeout_minutes`            | 30                       | A measurement that runs longer fails                                             |
 | `[measure] exclusive`                  | false                    | Let running workers finish, and start none, while measuring, for timings         |
 | `usage_env_file`                       | none                     | An env file with `AGENT_MEMORY_TOKEN` and `WEB_API_URL`, for token usage (`~`)   |
+| `repo`                                 | none                     | The GitHub repository, `owner/name`; written into the goal so commits link to it |
 | `[lead] model`                         | opus                     | Any `--model` value, or `ollama:<name>`                                          |
 | `[lead] round_every_minutes`           | 20                       | Heartbeat round interval; 1 to 29, since the lead claim lasts 30                 |
 | `[lead] ideas_model`                   | inherit                  | Model of the sub-agent the lead asks for ideas when stuck: inherit, name, none   |
