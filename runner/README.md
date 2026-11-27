@@ -8,8 +8,8 @@ The board runner drives a [blackboard](../skills/blackboard/SKILL.md) board from
 - It asks the lead for a round exactly when one is needed: as soon as a worker finishes or finds nothing to do, and at
   least every `round_every_minutes`.
 
-The runner never reads shared memory. It learns what happened from the `BOARD-` line that every runner-mode session
-ends with. Its one write is the token usage of the sessions it starts (see [Token usage](#token-usage)). Design:
+The runner never reads shared memory. It learns what happened from the `BOARD-` line that every runner-mode session ends
+with. Its one write is the token usage of the sessions it starts (see [Token usage](#token-usage)). Design:
 `docs/superpowers/specs/2026-11-24-board-runner-design.md`.
 
 ## Install

@@ -6,6 +6,7 @@ import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdic
 import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
+import { formatTokens, inputTotal, runsFor } from './usage.js';
 
 /**
  * @typedef {import('../../supabase/functions/_shared/types.ts').Memory} Memory
@@ -17,6 +18,7 @@ import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
  *   progressText?: () => string;
  *   status?: () => import('./board.js').ShownStatus | null;
  *   pollNow?: () => Promise<void>;
+ *   usage?: () => import('./usage.js').Run[];
  * }} DrawerCtx `scope`, `status` and `pollNow` come only from the Board tab's board view, and turn on the drawer's
  *   shortcuts and the goal's amendments
  * @typedef {'memory' | 'links' | 'log'} TabName
@@ -253,6 +255,52 @@ function row(label, value) {
   return r;
 }
 
+/** @param {number} n */
+function exact(n) {
+  return n.toLocaleString('en-GB');
+}
+
+/** @param {number} ms */
+function runTime(ms) {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * A count shortened, with the exact figure as its tooltip.
+ * @param {number} n
+ */
+function count(n) {
+  const el = h('span', '', formatTokens(n));
+  el.title = exact(n);
+  return el;
+}
+
+/**
+ * The token counts of the runs that worked on this memory: raw counts only.
+ * @param {import('./usage.js').Run[]} runs
+ */
+function tokensBlock(runs) {
+  const box = h('div', 'drawer-tokens');
+  box.append(h('div', 'drawer-tokens-head', runs.length === 1 ? 'Tokens' : `Tokens (${runs.length} runs)`));
+  for (const r of runs) {
+    const t = r.tokens;
+    const meta = h('dl', 'drawer-meta');
+    meta.append(
+      row('Run', `${r.role} ${r.runLabel}${r.runnerModel ? ` · ${r.runnerModel}` : ''}`),
+      row('In', count(inputTotal(t))),
+      row('Fresh input', count(t.input)),
+      row('Cache read', count(t.cacheRead)),
+      row('Cache write', count(t.cacheWrite)),
+      row('Out', count(t.output)),
+    );
+    if (r.turns != null) meta.append(row('Turns', String(r.turns)));
+    if (r.durationMs != null) meta.append(row('Run time', runTime(r.durationMs)));
+    box.append(meta);
+  }
+  return box;
+}
+
 /**
  * @param {Memory} m
  * @param {DrawerCtx} ctx
@@ -292,6 +340,8 @@ function memoryPanel(m, ctx, my) {
     out.push(box);
   }
   out.push(h('div', 'drawer-content', m.content));
+  const runs = ctx.usage ? runsFor(ctx.usage(), m) : [];
+  if (runs.length) out.push(tokensBlock(runs));
   const { board, scope, nodes, status, pollNow } = ctx;
   if (board && scope && nodes && status && pollNow) {
     const hooks = {

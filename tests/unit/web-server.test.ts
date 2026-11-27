@@ -735,3 +735,20 @@ Deno.test('handle turns an unexpected throw into a secured 500 and logs no error
     assert(!JSON.stringify(logged.map((a) => a.map(String))).includes('/private/path'));
   });
 });
+
+Deno.test('proxyApi forwards GET /api/usage and never a POST to the usage routes', async () => {
+  const { fn, calls } = fakeFetch(jsonOk);
+  const res = await proxyApi(new Request('http://localhost:8787/api/usage?scope=s&board=b'), CFG, fn);
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(calls.map((c) => c.url), ['https://abc.supabase.co/functions/v1/web-api/usage?scope=s&board=b']);
+  for (const path of ['usage', 'usage/delete']) {
+    const r = await proxyApi(post(path, '{}'), CFG, fn);
+    assertEquals(r.status, 405, `POST ${path}`);
+    await r.body?.cancel();
+  }
+  const g = await proxyApi(new Request('http://localhost:8787/api/usage/delete'), CFG, fn);
+  assertEquals(g.status, 404);
+  await g.body?.cancel();
+  assertEquals(calls.length, 1);
+});
