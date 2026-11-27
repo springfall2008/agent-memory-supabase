@@ -27,7 +27,9 @@ Run one Deno test file or test: `deno test -A tests/integration/pg-store-read.te
 
 CI (`.github/workflows/ci.yml`, Supabase CLI pinned at 3.0.0) runs check, unit, `supabase db start`, pgTAP and
 integration. E2E is local only. After editing function code, restart `supabase functions serve`: a running server can
-boot a half-written file and fail with BOOT_ERROR or "Unexpected eof".
+boot a half-written file and fail with BOOT_ERROR or "Unexpected eof". The edge runtime's parser is older than
+`deno check`'s: a regex literal holding a quote in `_shared/web-api.ts` passed `deno check` but would not boot, so serve
+the function once after an edit, before a deploy.
 
 ## Architecture
 
@@ -101,17 +103,23 @@ past the snippet), so the MCP tool's output stays as it was.
 boards on these tools: graph, claim_next, claims, links and search browse. It has no server code of its own. The design
 is in `docs/superpowers/specs/2026-11-23-blackboard-skill-design.md`. Test a change to it the way the plan
 `docs/superpowers/plans/2026-11-23-blackboard-skill.md` did: subagents run single cycles on a throwaway `board:toy-*`
-board in `agent-memory-tool`, and the board is deleted afterwards. This repo holds the maintained copy; projects keep
-only their board files.
+board in `agent-memory-tool`, and the board is deleted afterwards (with `board-runner forget-usage <board file>` for its
+token usage rows). This repo holds the maintained copy; projects keep only their board files.
 
 **Board runner.** `runner/` is Python 3.11+, standard library only, with `unittest` tests (CI job `runner`). It drives a
 board from a TOML board file. Design: `docs/superpowers/specs/2026-11-24-board-runner-design.md`.
 
 - **Processes:** it keeps the lead as an interactive `claude` session in tmux, and starts one fresh `claude -p` worker
   per intent, per configured slot.
-- **Board-blind:** it never touches shared memory. Sessions run the skill in `runner` mode and end with a `BOARD-WORK`,
-  `BOARD-LEAD` or `BOARD-START` line, which `protocol.py` parses. A Stop hook (`hook.py`) appends each lead turn to
-  `events.jsonl`.
+- **Board-blind:** it never reads shared memory. Sessions run the skill in `runner` mode and end with a `BOARD-WORK`,
+  `BOARD-LEAD` or `BOARD-START` line, which `protocol.py` parses. A Stop hook (`hook.py`) appends each lead turn, and
+  its transcript path, to `events.jsonl`.
+- **Token usage:** its one write. `usage.py` reads raw token counts (never dollars) from each worker's, one-shot's and
+  the lead's transcripts, and `usage_sender.py` posts them to `web-api`'s `POST /usage` with the person's
+  `AGENT_MEMORY_TOKEN` (from the environment or the board file's `usage_env_file`). Rows go through
+  `usage-pending.jsonl` and are retried until accepted; only a 400, 413 or 422 drops one, so `/usage` answers scope
+  errors with 404 or 403. They land in the `board_usage` table (`record_board_usage` upserts on scope, board and run
+  label; agents never see it). Design: `docs/superpowers/specs/2026-11-27-token-usage-design.md`.
 - **Scheduler:** `scheduler.py` is pure, with events in and actions out, so every scheduling rule is unit-tested with a
   fake clock. `cli.py` is the I/O loop around it.
 - **Tests:** change the scheduler test-first. Test runner-mode skill changes with subagents on toy boards, as above.
@@ -123,10 +131,10 @@ controls: `docs/superpowers/specs/2026-11-26-web-ui-hints-intents-design.md`.
 
 - **Data:** the server talks only to the `web-api` Edge Function (`supabase/functions/web-api/index.ts`, routes in
   `_shared/web-api.ts`), never to Postgres. It adds the token from `.env` and forwards only an allow-list: GET routes
-  (`/api/scopes`, `boards`, `graph`, `memories`, `memories/:id`) and four POST routes (`hints`, `intents`, `amendments`,
-  `boards/control`), so the token never reaches the browser. It binds to `127.0.0.1` and checks `Host`. A POST must be
-  JSON, at most 16 KiB, and same-origin (`Sec-Fetch-Site`, or `Origin` when that is absent), else 403, and gets a 30 s
-  timeout (`web/lib/proxy.ts`).
+  (`/api/scopes`, `boards`, `graph`, `usage`, `memories`, `memories/:id`) and four POST routes (`hints`, `intents`,
+  `amendments`, `boards/control`; never `usage`, which only the runner writes), so the token never reaches the browser.
+  It binds to `127.0.0.1` and checks `Host`. A POST must be JSON, at most 16 KiB, and same-origin (`Sec-Fetch-Site`, or
+  `Origin` when that is absent), else 403, and gets a 30 s timeout (`web/lib/proxy.ts`).
 - **web-api:** read routes on `PgMemoryStore` as the caller, with the embedder built lazily so only text search loads
   it. Browse and ranked search from here do not count as an access. There is no history route.
 - **Writes:** `POST /hints`, `/intents`, `/amendments` and `/boards/control` run as the caller through `store`, `relate`
@@ -141,8 +149,9 @@ controls: `docs/superpowers/specs/2026-11-26-web-ui-hints-intents-design.md`.
   `$BOARD_RUNNER_HOME`). The label is untrusted text from a `By:` line, so it must match the shape `new_label` makes,
   and the real path must stay inside that board's `workers/`. The server picks the byte offsets, so the browser never
   splits a UTF-8 sequence.
-- **Live:** the browser polls `/graph` every `POLL_MS` (3 s) while the tab is visible and diffs each result. Hosted
-  `/graph` takes about 0.3 s whatever the board's size, mostly network and auth.
+- **Live:** the browser polls `/graph` every `POLL_MS` (3 s) while the tab is visible and diffs each result, and
+  `/usage` at most every 30 s for the strip's token total and the drawer's per-run counts. Hosted `/graph` takes about
+  0.3 s whatever the board's size, mostly network and auth.
 - **Tests:** pure helpers are split from DOM modules so they run under `deno task test:unit`. `deno task check`
   type-checks `web/lib` and `web/server.ts`. The browser modules are checked by hand against a toy board. The skill's
   paused branch, amendment fallback and `round:<n>` wording have not been run on a real board.

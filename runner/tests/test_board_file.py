@@ -104,6 +104,12 @@ class BoardFileTest(unittest.TestCase):
         self.assertEqual(bf.max_budget_usd, 20)
         self.assertEqual(bf.worker_timeout_minutes, 180)
 
+    def test_usage_env_file_is_optional_and_expanded(self):
+        self.assertIsNone(load_board_file(self.minimal()).usage_env_file)
+        bf = load_board_file(self.minimal(replace=('rules = "Compute only."', 'rules = "Compute only."\nusage_env_file = "~/x.env"')))
+        self.assertEqual(bf.usage_env_file, Path("~/x.env").expanduser())
+        self.assertRejects(self.minimal(replace=('rules = "Compute only."', 'rules = "Compute only."\nusage_env_file = 3')), "usage_env_file")
+
     def test_minimal_defaults(self):
         bf = load_board_file(self.minimal())
         self.assertEqual(bf.max_open_intents, 4)

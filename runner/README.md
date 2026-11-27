@@ -8,8 +8,9 @@ The board runner drives a [blackboard](../skills/blackboard/SKILL.md) board from
 - It asks the lead for a round exactly when one is needed: as soon as a worker finishes or finds nothing to do, and at
   least every `round_every_minutes`.
 
-The runner never reads or writes shared memory itself. It learns what happened from the `BOARD-` line that every
-runner-mode session ends with. Design: `docs/superpowers/specs/2026-11-24-board-runner-design.md`.
+The runner never reads shared memory. It learns what happened from the `BOARD-` line that every runner-mode session ends
+with. Its one write is the token usage of the sessions it starts (see [Token usage](#token-usage)). Design:
+`docs/superpowers/specs/2026-11-24-board-runner-design.md`.
 
 ## Install
 
@@ -78,6 +79,7 @@ TOML. Unknown keys are errors, so a typo is never silently ignored. See `example
 | `[measure] pass_exit_code`             | 0                        | The exit code that means the candidate meets the goal                            |
 | `[measure] timeout_minutes`            | 30                       | A measurement that runs longer fails                                             |
 | `[measure] exclusive`                  | false                    | Let running workers finish, and start none, while measuring, for timings         |
+| `usage_env_file`                       | none                     | An env file with `AGENT_MEMORY_TOKEN` and `WEB_API_URL`, for token usage (`~`)   |
 | `[lead] model`                         | opus                     | Any `--model` value, or `ollama:<name>`                                          |
 | `[lead] round_every_minutes`           | 20                       | Heartbeat round interval; 1 to 29, since the lead claim lasts 30                 |
 | `[lead] ideas_model`                   | inherit                  | Model of the sub-agent the lead asks for ideas when stuck: inherit, name, none   |
@@ -91,6 +93,25 @@ TOML. Unknown keys are errors, so a typo is never silently ignored. See `example
 
 When a worker passes its runtime limit, the runner kills it and runs `/blackboard release`. That frees its claim and
 leaves a "worker timed out" hint, and the lead drops or splits an intent that has timed out twice.
+
+## Token usage
+
+The runner records the raw token counts (input, output, cache read, cache write, per model; never dollars) of every
+session it starts, in the `board_usage` table through `web-api`:
+
+- a **worker** when it exits, from its transcript's final `result` line, or from its messages when it was killed before
+  writing one; a worker left by a runner that died is counted at the next start;
+- the **lead** after each turn, from its session transcript and sub-agents, as one row per lead label that each turn
+  replaces;
+- the **start** and **release** one-shots.
+
+It needs `AGENT_MEMORY_TOKEN` and `WEB_API_URL` (or `AGENT_MEMORY_URL`, with `agent-memory` replaced by `web-api`), from
+its environment or the board file's `usage_env_file`. Every row goes to `usage-pending.jsonl` in the board's runner
+folder first and leaves it once `web-api` accepts it, so nothing is lost while the token is missing, the database is
+unreachable or `web-api` is older than the runner: rows are retried with backoff (up to every 5 minutes), and only a row
+`web-api` refuses for its content is dropped. Deploy the `board_usage` migration and `web-api` before relying on it.
+
+`board-runner forget-usage <board file>` deletes a board's usage rows, for example after a toy board.
 
 ## Tests
 

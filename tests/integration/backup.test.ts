@@ -464,6 +464,49 @@ Deno.test('a scoped backup includes the sessions and members its claims referenc
     assertEquals(back[0].session_id, s3.id);
   }));
 
+const usageRows = (db: DbSql) =>
+  db`select s.name as scope, u.board, u.run_label, u.role, u.intent_id, u.outcome, u.runner_model, u.input_tokens::text,
+       u.output_tokens::text, u.cache_read_tokens::text, u.cache_write_tokens::text, u.turns, u.duration_ms::text,
+       u.models, u.started_at::text, u.ended_at::text, m.display_name as recorder, u.created_at::text, u.updated_at::text
+    from agent_memory.board_usage u join agent_memory.scopes s on s.id = u.scope_id
+    join agent_memory.members m on m.id = u.recorded_by order by u.run_label`;
+
+Deno.test('backup round-trips board usage, and a scoped backup keeps only its scope and the recorder', () =>
+  withEmptyDb(async (db) => {
+    await seedThreads(db);
+    const [ann] = await db`select id from agent_memory.members where display_name = 'th-ann'`;
+    const [cat] = await db`select id from agent_memory.members where display_name = 'th-cat'`;
+    const [alpha] = await db`select id from agent_memory.scopes where name = 'th-alpha'`;
+    const [beta] = await db`select id from agent_memory.scopes where name = 'th-beta'`;
+    await db`insert into agent_memory.board_usage (scope_id, board, run_label, role, intent_id, outcome, runner_model,
+        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, turns, duration_ms, models, started_at,
+        ended_at, recorded_by, created_at, updated_at)
+      values (${alpha.id}, 'b', 'board-b-0001', 'worker', null, 'fact confirmed', 'opus', 9007199254740991, 2, 3, 4, 5,
+              6000, '{"opus": {"input": 1, "output": 2, "cacheRead": 3, "cacheWrite": 4}}',
+              '2026-05-01 00:00:01.123456+00', '2026-05-01 00:00:02.234567+00', ${cat.id},
+              '2026-05-01 00:00:03.345678+00', '2026-05-01 00:00:04.456789+00'),
+             (${beta.id}, 'b', 'board-b-lead-0002', 'lead', null, null, 'fable', 1, 1, 1, 1, null, null, '{}', null, null,
+              ${ann.id}, now(), now())`;
+    const before = [...(await usageRows(db))];
+    const file = `${dir}/usage.json`;
+    const r1 = await cli('backup', '--out', file);
+    assertEquals(r1.code, 0, r1.err);
+    assertStringIncludes(r1.out, '2 usage rows');
+    await db`truncate agent_memory.memories, agent_memory.memory_history, agent_memory.scope_grants,
+      agent_memory.access_tokens, agent_memory.members, agent_memory.scopes cascade`;
+    const r2 = await cli('restore-backup', file);
+    assertEquals(r2.code, 0, r2.err);
+    assertStringIncludes(r2.out, '2 usage rows');
+    assertEquals([...(await usageRows(db))], before);
+
+    const scoped = `${dir}/usage-scoped.json`;
+    assertEquals((await cli('backup', '--scope', 'th-alpha', '--out', scoped)).code, 0);
+    const d = JSON.parse(await Deno.readTextFile(scoped));
+    assertEquals(d.boardUsage.length, 1);
+    assertEquals(d.boardUsage[0].recordedBy, 'th-cat');
+    assert(d.members.some((m: { displayName: string }) => m.displayName === 'th-cat'), 'the recorder is included');
+  }));
+
 Deno.test('remove the backup test directory', async () => {
   if (!keepDir) await Deno.remove(dir, { recursive: true });
 });

@@ -3,6 +3,7 @@ import { type Caller, connect, resolveCaller } from '../_shared/db.ts';
 import { GteSmallEmbedder, LazyEmbedder } from '../_shared/embedder.ts';
 import { PgMemoryStore } from '../_shared/pg-store.ts';
 import { routeWebApi } from '../_shared/web-api.ts';
+import { PgUsageStore } from '../_shared/usage-store.ts';
 
 // Module level: reused across requests on a warm worker.
 const dbUrl = Deno.env.get('SUPABASE_DB_URL');
@@ -30,7 +31,11 @@ async function handle(req: Request): Promise<Response> {
     return Response.json({ error: 'service unavailable' }, { status: 503 });
   }
   if (!caller) return unauthorized();
-  return await routeWebApi(req, new PgMemoryStore(sql, caller.memberId, embedder));
+  return await routeWebApi(
+    req,
+    new PgMemoryStore(sql, caller.memberId, embedder),
+    new PgUsageStore(sql, caller.memberId),
+  );
 }
 
 Deno.serve(handle);

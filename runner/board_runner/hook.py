@@ -1,4 +1,4 @@
-"""The lead's Stop hook: record the text of each finished turn in events.jsonl.
+"""The lead's Stop hook: record the text of each finished turn, and its transcript path, in events.jsonl.
 
 It must never raise or exit non-zero. A failing Stop hook shows errors in the lead's screen, and exit code 2 would stop
 the lead from finishing its turn at all.
@@ -50,6 +50,9 @@ def hook_stop(events_path: Path, stdin_text: str, now: Callable[[], str]) -> Non
             transcript = data.get("transcript_path")
             text = last_assistant_text(Path(transcript)) if isinstance(transcript, str) else ""
         event = {"time": now(), "session_id": data.get("session_id"), "text": text[-TEXT_CAP:]}
+        # The runner reads the lead's token counts from this transcript (and its sub-agents') after each turn.
+        if isinstance(data.get("transcript_path"), str):
+            event["transcript_path"] = data["transcript_path"]
         events_path = Path(events_path)
         events_path.parent.mkdir(parents=True, exist_ok=True)
         with events_path.open("a") as handle:

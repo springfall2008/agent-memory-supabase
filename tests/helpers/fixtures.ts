@@ -56,6 +56,8 @@ export async function makeWorld(sql: AdminSql): Promise<World> {
       // The history trigger writes a 'purge' row on delete, so clear history after the memories.
       const gone = await sql`delete from agent_memory.memories where scope_id = any(${scopeIds}::uuid[]) returning id`;
       await sql`delete from agent_memory.memory_history where memory_id = any(${gone.map((r) => r.id)}::uuid[])`;
+      // Usage rows reference the member who recorded them.
+      await sql`delete from agent_memory.board_usage where scope_id = any(${scopeIds}::uuid[])`;
       await sql`delete from agent_memory.members where id = any(${memberIds}::uuid[])`;
       await sql`delete from agent_memory.scopes where id = any(${scopeIds}::uuid[])`;
     },
