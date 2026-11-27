@@ -34,6 +34,7 @@ import {
   type StoreRequest,
   type UpdateRequest,
 } from './types.ts';
+import { type ModelTokens, USAGE_ROLES, type UsageRole, type UsageRow, type UsageStore } from './usage-store.ts';
 
 /** The slice of the store the web UI uses. `PgMemoryStore` satisfies it. */
 export interface WebStore {
@@ -305,21 +306,127 @@ async function controlBoard(req: Request, store: WebStore): Promise<Response> {
   return Response.json({ goal: await store.update(goal.id, u) });
 }
 
-const WRITE_ROUTES = new Map<string, (req: Request, store: WebStore) => Promise<Response>>([
+// ── Usage (written by the board runner) ────────────────────────────
+
+const USAGE_TEXT_MAX = 100;
+const USAGE_OUTCOME_MAX = 40;
+const USAGE_MODELS_MAX = 20;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+
+function countOf(v: unknown, key: string): number {
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
+    throw new Refusal(400, `${key} must be a whole number from 0`);
+  }
+  return v;
+}
+
+function tokensIn(v: unknown, key: string): ModelTokens {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Refusal(400, `${key} must be an object`);
+  const t = v as Body;
+  return {
+    input: countOf(t.input, `${key}.input`),
+    output: countOf(t.output, `${key}.output`),
+    cacheRead: countOf(t.cacheRead, `${key}.cacheRead`),
+    cacheWrite: countOf(t.cacheWrite, `${key}.cacheWrite`),
+  };
+}
+
+function boundedText(b: Body, key: string, max: number, nullable: boolean): string | null {
+  const v = b[key];
+  if (v === null && nullable) return null;
+  if (typeof v !== 'string' || v.length < 1 || v.length > max) {
+    throw new Refusal(400, `${key} must be 1 to ${max} characters`);
+  }
+  return v;
+}
+
+function nullableCount(b: Body, key: string): number | null {
+  return b[key] === null ? null : countOf(b[key], key);
+}
+
+function timeOf(b: Body, key: string): string | null {
+  const v = b[key];
+  if (v === null) return null;
+  if (typeof v !== 'string' || !ISO_TIME.test(v) || Number.isNaN(Date.parse(v))) {
+    throw new Refusal(400, `${key} must be an ISO-8601 time or null`);
+  }
+  return v;
+}
+
+/** A usage row from the body, every field checked; the SQL function checks them again. */
+function usageRowOf(b: Body): UsageRow {
+  const { scope, board } = boardOf(b);
+  const role = b.role;
+  if (!(USAGE_ROLES as readonly unknown[]).includes(role)) throw new Refusal(400, 'Invalid role');
+  const models = b.models;
+  if (typeof models !== 'object' || models === null || Array.isArray(models)) {
+    throw new Refusal(400, 'models must be an object');
+  }
+  const entries = Object.entries(models as Body);
+  if (entries.length > USAGE_MODELS_MAX) throw new Refusal(400, `At most ${USAGE_MODELS_MAX} models`);
+  const byModel: Record<string, ModelTokens> = {};
+  for (const [name, t] of entries) {
+    if (name.length < 1 || name.length > USAGE_TEXT_MAX) throw new Refusal(400, 'Invalid model name');
+    byModel[name] = tokensIn(t, `models.${name}`);
+  }
+  return {
+    scope,
+    board,
+    runLabel: boundedText(b, 'runLabel', USAGE_TEXT_MAX, false) as string,
+    role: role as UsageRole,
+    intentId: boundedText(b, 'intentId', USAGE_TEXT_MAX, true),
+    outcome: boundedText(b, 'outcome', USAGE_OUTCOME_MAX, true),
+    runnerModel: boundedText(b, 'runnerModel', USAGE_TEXT_MAX, false) as string,
+    tokens: tokensIn(b.tokens, 'tokens'),
+    turns: nullableCount(b, 'turns'),
+    durationMs: nullableCount(b, 'durationMs'),
+    models: byModel,
+    startedAt: timeOf(b, 'startedAt'),
+    endedAt: timeOf(b, 'endedAt'),
+  };
+}
+
+async function recordUsage(req: Request, _store: WebStore, usage: UsageStore): Promise<Response> {
+  const row = usageRowOf(await jsonBody(req));
+  return Response.json({ id: await usage.record(row) }, { status: 201 });
+}
+
+async function deleteUsage(req: Request, _store: WebStore, usage: UsageStore): Promise<Response> {
+  const { scope, board } = boardOf(await jsonBody(req));
+  return Response.json({ deleted: await usage.deleteBoard(scope, board) });
+}
+
+type WriteRoute = (req: Request, store: WebStore, usage: UsageStore) => Promise<Response>;
+
+const WRITE_ROUTES = new Map<string, WriteRoute>([
   ['hints', addHint],
   ['intents', addIntent],
   ['amendments', addAmendment],
   ['boards/control', controlBoard],
+  ['usage', recordUsage],
+  ['usage/delete', deleteUsage],
 ]);
 
-export async function routeWebApi(req: Request, store: WebStore): Promise<Response> {
+export async function routeWebApi(req: Request, store: WebStore, usage: UsageStore): Promise<Response> {
   const url = new URL(req.url);
   const route = routeOf(url);
   const p = url.searchParams;
-  const write = WRITE_ROUTES.get(route.join('/'));
-  if (req.method !== (write ? 'POST' : 'GET')) return bad('Method not allowed', 405);
+  const path = route.join('/');
+  const write = WRITE_ROUTES.get(path);
+  // `/usage` takes both: a GET reads a board's runs, a POST records one.
+  const method = path === 'usage'
+    ? req.method === 'GET' || req.method === 'POST'
+    : req.method === (write ? 'POST' : 'GET');
+  if (!method) return bad('Method not allowed', 405);
   try {
-    if (write) return await write(req, store);
+    if (write && req.method === 'POST') return await write(req, store, usage);
+
+    if (path === 'usage') {
+      const scope = p.get('scope');
+      const board = p.get('board');
+      if (!scope || !board) return bad('scope and board are required');
+      return Response.json(await usage.forBoard(scope, board));
+    }
 
     if (route.length === 1 && route[0] === 'scopes') {
       return Response.json({ scopes: await store.listScopes() });

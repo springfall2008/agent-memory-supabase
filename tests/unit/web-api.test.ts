@@ -1,5 +1,6 @@
 import { assertEquals } from '@std/assert';
 import { routeWebApi, type WebStore } from '../../supabase/functions/_shared/web-api.ts';
+import type { UsageRow, UsageStore } from '../../supabase/functions/_shared/usage-store.ts';
 import { StoreError } from '../../supabase/functions/_shared/limits.ts';
 import { LazyEmbedder } from '../../supabase/functions/_shared/embedder.ts';
 import type {
@@ -89,7 +90,26 @@ class Fake implements WebStore {
   }
 }
 
-const get = (store: WebStore, path: string) => routeWebApi(new Request(`http://x/functions/v1/web-api${path}`), store);
+/** Records what the usage routes pass through. */
+class UsageFake implements UsageStore {
+  calls: { fn: string; args: unknown[] }[] = [];
+  record(r: UsageRow) {
+    this.calls.push({ fn: 'record', args: [r] });
+    return Promise.resolve('33333333-3333-4333-8333-333333333333');
+  }
+  forBoard(scope: string, board: string) {
+    this.calls.push({ fn: 'forBoard', args: [scope, board] });
+    return Promise.resolve({ runs: [], total: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, more: false });
+  }
+  deleteBoard(scope: string, board: string) {
+    this.calls.push({ fn: 'deleteBoard', args: [scope, board] });
+    return Promise.resolve(2);
+  }
+}
+const NO_USAGE = new UsageFake();
+
+const get = (store: WebStore, path: string, usage: UsageStore = NO_USAGE) =>
+  routeWebApi(new Request(`http://x/functions/v1/web-api${path}`), store, usage);
 
 Deno.test('GET /scopes returns the scopes', async () => {
   const s = new Fake();
@@ -101,7 +121,7 @@ Deno.test('GET /scopes returns the scopes', async () => {
 Deno.test('the path resolves with or without the functions prefix', async () => {
   const s = new Fake();
   for (const url of ['http://x/web-api/scopes', 'http://x/functions/v1/web-api/scopes']) {
-    const r = await routeWebApi(new Request(url), s);
+    const r = await routeWebApi(new Request(url), s, NO_USAGE);
     assertEquals(r.status, 200);
     await r.json();
   }
@@ -256,7 +276,7 @@ Deno.test('a non-store error is a 500 Database error with no raw text', async ()
 
 Deno.test('non-GET is 405 and an unknown route is 404', async () => {
   const s = new Fake();
-  const p = await routeWebApi(new Request('http://x/web-api/scopes', { method: 'POST' }), s);
+  const p = await routeWebApi(new Request('http://x/web-api/scopes', { method: 'POST' }), s, NO_USAGE);
   assertEquals(p.status, 405);
   await p.json();
   const u = await get(s, '/nope');
@@ -361,7 +381,7 @@ function defined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
-const post = (store: WebStore, path: string, body: unknown, type = 'application/json') =>
+const post = (store: WebStore, path: string, body: unknown, type = 'application/json', usage: UsageStore = NO_USAGE) =>
   routeWebApi(
     new Request(`http://x/functions/v1/web-api${path}`, {
       method: 'POST',
@@ -369,6 +389,7 @@ const post = (store: WebStore, path: string, body: unknown, type = 'application/
       body: typeof body === 'string' ? body : JSON.stringify(body),
     }),
     store,
+    usage,
   );
 
 const HINT_TAGS = ['board:b', 'kind:hint', 'evergreen'];
@@ -506,7 +527,7 @@ Deno.test('POST /amendments: unknown board is 404, bad bodies are 400, wrong typ
   const t = await post(s, '/amendments', { scope: 's1', board: 'b', text: 'x' }, 'text/plain');
   assertEquals(t.status, 415);
   await t.json();
-  const g = await routeWebApi(new Request('http://x/functions/v1/web-api/amendments'), s);
+  const g = await routeWebApi(new Request('http://x/functions/v1/web-api/amendments'), s, NO_USAGE);
   assertEquals(g.status, 405);
   await g.json();
   assertEquals(s.writes(), []);
@@ -530,6 +551,7 @@ Deno.test('write routes need a JSON content type, else 415', async () => {
     const none = await routeWebApi(
       new Request(`http://x/web-api${path}`, { method: 'POST', body: '{}' }).clone(),
       s,
+      NO_USAGE,
     );
     // A body string defaults to text/plain; still 415.
     assertEquals(none.status, 415, path);
@@ -819,4 +841,89 @@ Deno.test('write routes reject GET and read routes reject POST with 405', async 
   const p = await post(s, '/graph', {});
   assertEquals(p.status, 405);
   await p.json();
+});
+
+// ── usage ──────────────────────────────────────────────────────────
+
+const ROW: UsageRow = {
+  scope: 's1',
+  board: 'b',
+  runLabel: 'board-b-0a1b',
+  role: 'worker',
+  intentId: ID,
+  outcome: 'fact confirmed',
+  runnerModel: 'opus',
+  tokens: { input: 10, output: 20, cacheRead: 300, cacheWrite: 4 },
+  turns: 6,
+  durationMs: 12345,
+  models: { 'claude-opus-5-5': { input: 10, output: 20, cacheRead: 300, cacheWrite: 4 } },
+  startedAt: '2026-11-27T08:00:00Z',
+  endedAt: '2026-11-27T08:05:00Z',
+};
+
+Deno.test('POST /usage passes a valid row through unchanged', async () => {
+  const u = new UsageFake();
+  const r = await post(new Fake(), '/usage', ROW, 'application/json', u);
+  assertEquals(r.status, 201);
+  assertEquals(await r.json(), { id: '33333333-3333-4333-8333-333333333333' });
+  assertEquals(u.calls, [{ fn: 'record', args: [ROW] }]);
+});
+
+Deno.test('POST /usage takes nulls where a run has no intent, turns or times', async () => {
+  const u = new UsageFake();
+  const row = { ...ROW, role: 'lead', intentId: null, outcome: null, turns: null, durationMs: null, startedAt: null };
+  const r = await post(new Fake(), '/usage', row, 'application/json', u);
+  assertEquals(r.status, 201);
+  await r.json();
+  assertEquals(u.calls, [{ fn: 'record', args: [row] }]);
+});
+
+Deno.test('POST /usage refuses a row that breaks the limits', async () => {
+  const many = Object.fromEntries(
+    Array.from({ length: 21 }, (_, i) => [`m${i}`, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }]),
+  );
+  const cases: [string, unknown][] = [
+    ['negative count', { ...ROW, tokens: { ...ROW.tokens, input: -1 } }],
+    ['fractional count', { ...ROW, tokens: { ...ROW.tokens, output: 1.5 } }],
+    ['unknown role', { ...ROW, role: 'boss' }],
+    ['21 models', { ...ROW, models: many }],
+    ['missing runLabel', { ...ROW, runLabel: undefined }],
+    ['long runLabel', { ...ROW, runLabel: 'x'.repeat(101) }],
+    ['bad board', { ...ROW, board: 'Not A Board' }],
+    ['string count in a model', { ...ROW, models: { m: { input: '1', output: 1, cacheRead: 0, cacheWrite: 0 } } }],
+    ['bad startedAt', { ...ROW, startedAt: 'yesterday' }],
+  ];
+  for (const [name, body] of cases) {
+    const u = new UsageFake();
+    const r = await post(new Fake(), '/usage', body, 'application/json', u);
+    assertEquals(r.status, 400, name);
+    await r.json();
+    assertEquals(u.calls, [], name);
+  }
+});
+
+Deno.test('GET /usage needs scope and board and passes them through', async () => {
+  const u = new UsageFake();
+  const none = await get(new Fake(), '/usage?scope=s1', u);
+  assertEquals(none.status, 400);
+  await none.json();
+  const r = await get(new Fake(), '/usage?scope=s1&board=b', u);
+  assertEquals(r.status, 200);
+  assertEquals(await r.json(), {
+    runs: [],
+    total: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    more: false,
+  });
+  assertEquals(u.calls, [{ fn: 'forBoard', args: ['s1', 'b'] }]);
+});
+
+Deno.test("POST /usage/delete deletes a board's rows; GET is not allowed", async () => {
+  const u = new UsageFake();
+  const r = await post(new Fake(), '/usage/delete', { scope: 's1', board: 'b' }, 'application/json', u);
+  assertEquals(r.status, 200);
+  assertEquals(await r.json(), { deleted: 2 });
+  assertEquals(u.calls, [{ fn: 'deleteBoard', args: ['s1', 'b'] }]);
+  const g = await get(new Fake(), '/usage/delete?scope=s1&board=b', u);
+  assertEquals(g.status, 405);
+  await g.json();
 });
