@@ -683,6 +683,22 @@ class UsageTest(unittest.TestCase):
         self.assertEqual(len(pending), 2)
 
 
+class KilledWorkersUsageTest(unittest.TestCase):
+    def test_workers_killed_by_a_double_interrupt_are_counted(self):
+        h = Harness(self, board(workers=(WorkerSlot("haiku", 120), WorkerSlot("sonnet", 120))))
+        self.addCleanup(h.close)
+        h.worker_seconds = 10_000
+        h.worker_texts = [(assistant_line("m1", 5)).encode(), (assistant_line("m2", 7)).encode()]
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=2 open=2"))
+        h.at(20, h.runner.interrupt)
+        h.at(21, h.runner.interrupt)
+        self.assertEqual(h.runner.run(takeover=False), 0)
+        rows = h.usage_rows("worker")
+        self.assertEqual(sorted(r["tokens"]["output"] for r in rows), [5, 7])
+        self.assertEqual({r["outcome"] for r in rows}, {"stopped"})
+        self.assertEqual({r["runnerModel"] for r in rows}, {"haiku", "sonnet"})
+
+
 class ForgetUsageTest(unittest.TestCase):
     def test_forget_usage_posts_the_board_to_the_delete_route(self):
         tmp = tempfile.TemporaryDirectory()

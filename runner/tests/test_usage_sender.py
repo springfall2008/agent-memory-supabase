@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from board_runner.usage_sender import QUEUE_MAX, UsageQueue, usage_config
+from board_runner.usage_sender import FLUSH_ROWS, QUEUE_MAX, UsageQueue, usage_config
 
 
 def row(label: str, n: int = 1) -> dict:
@@ -91,6 +91,19 @@ class QueueTest(unittest.TestCase):
         q.add(row("c"))
         q.flush(5)
         self.assertEqual(post.calls[-1][1]["runLabel"], "c")
+
+    def test_a_backlog_drains_a_few_rows_per_tick(self):
+        post = FakePost()
+        q = self.queue(post)
+        for i in range(25):
+            q.add(row(f"r{i}"))
+        self.assertEqual(FLUSH_ROWS, 10)
+        q.flush(0)
+        self.assertEqual(len(post.calls), 10)
+        q.flush(1)
+        q.flush(2)
+        self.assertEqual(len(post.calls), 25)
+        self.assertEqual(q.pending(), 0)
 
     def test_the_same_failure_is_logged_once(self):
         post = FakePost(*([404] * 5))

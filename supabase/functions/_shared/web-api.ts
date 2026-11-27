@@ -397,6 +397,8 @@ async function recordUsage(req: Request, _store: WebStore, usage: UsageStore): P
     const m = e instanceof StoreError ? e.message : '';
     if (m.startsWith("Scope '") && m.endsWith("' not found")) throw new Refusal(404, m);
     if (m.startsWith('No write access to scope ')) throw new Refusal(403, m);
+    // A connection reset, a timeout or a missing migration may clear up: not the row's fault, so not a 400.
+    if (m === 'Database error') throw new Refusal(503, m);
     throw e;
   }
 }

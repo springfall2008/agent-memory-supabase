@@ -942,3 +942,11 @@ Deno.test('POST /usage answers 404 and 403 for scope errors, so the runner keeps
   assertEquals(r.status, 400, 'a row the database refuses for its content stays a 400');
   await r.json();
 });
+
+Deno.test('POST /usage answers 503 for a database error, so the runner retries instead of dropping the row', async () => {
+  const u = new UsageFake();
+  u.record = () => Promise.reject(new StoreError('Database error'));
+  const r = await post(new Fake(), '/usage', ROW, 'application/json', u);
+  assertEquals(r.status, 503);
+  assertEquals(await r.json(), { error: 'Database error' });
+});

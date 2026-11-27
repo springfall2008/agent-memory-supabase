@@ -14,6 +14,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 QUEUE_MAX = 10_000
+# Rows sent per loop tick: a backlog after an outage drains over a few ticks rather than stalling scheduling.
+FLUSH_ROWS = 10
 FIRST_DELAY = 5.0
 MAX_DELAY = 300.0
 # A row refused for its own content can never succeed: drop it. Anything else (a revoked token, a scope the token
@@ -90,11 +92,13 @@ class UsageQueue:
             self.log(f"cannot write the usage queue {self.path}: {exc}", warn=True)
 
     def flush(self, now: float) -> None:
-        """Send the due rows in order, stopping at the first that fails for a reason that may clear up."""
+        """Send up to FLUSH_ROWS due rows in order, stopping at the first that fails for a reason that may clear up."""
         if not self.rows or now < self.next_at:
             return
         changed = False
-        while self.rows:
+        sent = 0
+        while self.rows and sent < FLUSH_ROWS:
+            sent += 1
             row = self.rows[0]
             try:
                 status = self.post("/usage", row)

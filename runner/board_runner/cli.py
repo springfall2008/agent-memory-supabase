@@ -628,6 +628,11 @@ class Runner:
         if kill_workers:
             for worker in self.workers.values():
                 self._signal_group(worker["proc"], signal.SIGKILL)
+                # A killed worker never reaches the exit path: count what its transcript holds.
+                self._record(
+                    "worker", worker["label"], run_usage(_read(worker["path"])), outcome="stopped",
+                    model=worker["model"], started=_iso(worker["started"]),
+                )
             if self.measure_proc is not None:
                 self._signal_group(self.measure_proc["proc"], signal.SIGKILL)
         try:
