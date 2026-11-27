@@ -246,3 +246,25 @@ export function parsePatch(text, truncated = false) {
   while (headLines.length && headLines[headLines.length - 1] === '') headLines.pop();
   return { head: headLines.join('\n'), files };
 }
+
+/** Columns a tab advances to: the next multiple of this. The view sets the same `tab-size`. */
+export const TAB_SIZE = 4;
+
+/**
+ * The widest line of a file in columns, tabs expanded, so the view knows how far a side can scroll.
+ * @param {DiffFile} f
+ */
+export function longestLine(f) {
+  let widest = 0;
+  for (const hk of f.hunks) {
+    for (const r of hk.rows) {
+      for (const c of [r.left, r.right]) {
+        if (!c) continue;
+        let col = 0;
+        for (const ch of c.text) col = ch === '\t' ? col + TAB_SIZE - (col % TAB_SIZE) : col + 1;
+        if (col > widest) widest = col;
+      }
+    }
+  }
+  return widest;
+}

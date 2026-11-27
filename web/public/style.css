@@ -1014,7 +1014,7 @@ button.danger {
 }
 
 .diff-card-body {
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .diff-card-body > .note,
@@ -1022,12 +1022,11 @@ button.danger {
   margin: 6px 8px;
 }
 
-/* As wide as the longest line, at least the card: lines keep their layout and the card scrolls sideways. */
+/* Two equal halves: a long line is clipped, and the file's scroll bar shifts both sides together. */
 .diff-split {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   border-collapse: collapse;
-  table-layout: auto;
+  table-layout: fixed;
   font-family: ui-monospace, monospace;
   font-size: 12px;
   line-height: 1.45;
@@ -1039,7 +1038,7 @@ button.danger {
 }
 
 .diff-col-n {
-  width: 1%;
+  width: 7ch;
 }
 
 .diff-n {
@@ -1050,7 +1049,29 @@ button.danger {
 }
 
 .diff-code {
+  overflow: hidden;
   white-space: pre;
+  tab-size: 4;
+}
+
+.diff-text {
+  display: inline-block;
+  transform: translateX(calc(-1 * var(--diff-x, 0px)));
+}
+
+/* Sticks to the bottom of the visible diff while its file is on screen. */
+.diff-hscroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.diff-hscroll-inner {
+  height: 1px;
 }
 
 .diff-code.diff-left {
@@ -1084,6 +1105,8 @@ button.danger {
   background: rgb(59 130 246 / 12%);
   color: var(--accent);
   white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* "Full width" on the Diff tab: wider than any dragged width, leaving the graph its minimum. */
