@@ -1014,7 +1014,7 @@ button.danger {
 }
 
 .diff-card-body {
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .diff-card-body > .note,
@@ -1022,6 +1022,7 @@ button.danger {
   margin: 6px 8px;
 }
 
+/* Two equal halves: a long line is clipped, and the file's scroll bar shifts both sides together. */
 .diff-split {
   width: 100%;
   border-collapse: collapse;
@@ -1036,16 +1037,41 @@ button.danger {
   vertical-align: top;
 }
 
+.diff-col-n {
+  width: 7ch;
+}
+
 .diff-n {
-  width: 3.5em;
+  white-space: nowrap;
   color: var(--muted);
   text-align: right;
   user-select: none;
 }
 
 .diff-code {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.diff-text {
+  display: inline-block;
+  transform: translateX(calc(-1 * var(--diff-x, 0px)));
+}
+
+/* Sticks to the bottom of the visible diff while its file is on screen. */
+.diff-hscroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.diff-hscroll-inner {
+  height: 1px;
 }
 
 .diff-code.diff-left {
@@ -1078,6 +1104,9 @@ button.danger {
   padding: 2px 8px;
   background: rgb(59 130 246 / 12%);
   color: var(--accent);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* "Full width" on the Diff tab: wider than any dragged width, leaving the graph its minimum. */

@@ -10,7 +10,7 @@ import {
   progressFields,
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
-import { openCards, parsePatch, unquotePath, wordParts } from '../../web/public/diffparse.js';
+import { longestLine, openCards, parsePatch, unquotePath, wordParts } from '../../web/public/diffparse.js';
 import { commitOf, githubCommitUrl } from '../../web/public/commits.js';
 import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
 import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
@@ -1045,4 +1045,18 @@ Deno.test('openCards opens files until a total row budget, and never one over th
   const many = openCards(Array.from({ length: 300 }, () => f(300)) as never, 400, 3000);
   assertEquals(many.filter(Boolean).length, 10);
   assertEquals(many.slice(0, 10).every(Boolean), true);
+});
+
+Deno.test('longestLine counts the widest cell in columns, a tab to the next multiple of four', () => {
+  const file = parsePatch(
+    ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,2 +1,2 @@', ' short', '-\tab', '+a much longer line'].join(
+      '\n',
+    ),
+  )
+    .files[0];
+  assertEquals(longestLine(file), 'a much longer line'.length);
+  const tabs =
+    parsePatch(['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1 +1 @@', '-ab\tc', '+x'].join('\n')).files[0];
+  assertEquals(longestLine(tabs), 5); // "ab" then a tab to column 4, then "c"
+  assertEquals(longestLine({ hunks: [] } as never), 0);
 });

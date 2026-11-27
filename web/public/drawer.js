@@ -7,7 +7,7 @@ import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 import { commitOf, githubCommitUrl } from './commits.js';
-import { openCards, parsePatch } from './diffparse.js';
+import { longestLine, openCards, parsePatch } from './diffparse.js';
 import { clampDrawerWidth, DRAWER_MIN, KEY_STEP, parseStoredWidth, WIDTH_KEY } from './resize.js';
 import { formatTokens, inputTotal, runsFor } from './usage.js';
 
@@ -442,7 +442,7 @@ function fileCard(f, startOpen) {
     if (body.childElementCount) return;
     if (f.status === 'binary') body.append(h('p', 'note', 'Binary file: not shown.'));
     else if (f.hunks.length === 0) body.append(h('p', 'note', 'No line changes.'));
-    else body.append(splitTable(f));
+    else body.append(splitTable(f), sideScroll(card, body, f));
     if (f.incomplete) body.append(h('p', 'drawer-message error', 'This file is cut short.'));
   };
   if (open) fill();
@@ -461,6 +461,11 @@ function fileCard(f, startOpen) {
 /** @param {import('./diffparse.js').DiffFile} f */
 function splitTable(f) {
   const table = h('table', 'diff-split');
+  // Explicit columns: narrow line numbers and code as wide as its longest line. Without them the spanning hunk row
+  // would set four equal columns.
+  const cols = h('colgroup');
+  cols.append(h('col', 'diff-col-n'), h('col', 'diff-col-code'), h('col', 'diff-col-n'), h('col', 'diff-col-code'));
+  table.append(cols);
   const tbody = h('tbody');
   for (const hk of f.hunks) {
     const sep = h('tr', 'diff-hunk-row');
@@ -478,6 +483,56 @@ function splitTable(f) {
   return table;
 }
 
+/** Width of one character in the diff's monospace font, measured once. */
+let charPx = 0;
+
+/** @param {HTMLElement} inside a code cell, so the measure uses its font */
+function charWidth(inside) {
+  if (charPx) return charPx;
+  const probe = h('span', 'diff-text', '0'.repeat(100));
+  probe.style.visibility = 'hidden';
+  inside.append(probe);
+  charPx = probe.getBoundingClientRect().width / 100 || 7;
+  probe.remove();
+  return charPx;
+}
+
+/**
+ * One sideways scroll bar per file, stuck to the bottom of the visible diff while the file is on screen. Both sides
+ * keep half the width; the bar shifts every line of the file together, so old and new stay aligned. A sideways
+ * swipe, or shift with the wheel, over the file scrolls it too.
+ * @param {HTMLElement} card
+ * @param {HTMLElement} body
+ * @param {import('./diffparse.js').DiffFile} f
+ */
+function sideScroll(card, body, f) {
+  const bar = h('div', 'diff-hscroll');
+  const inner = h('div', 'diff-hscroll-inner');
+  bar.append(inner);
+  const widest = longestLine(f);
+  const measure = () => {
+    const code = /** @type {HTMLElement | null} */ (card.querySelector('td.diff-code'));
+    if (!code || !card.isConnected) return;
+    const pad = parseFloat(getComputedStyle(code).paddingLeft) + parseFloat(getComputedStyle(code).paddingRight);
+    const overflow = Math.ceil(widest * charWidth(code) + pad - code.clientWidth);
+    bar.hidden = overflow <= 0;
+    inner.style.width = `${card.clientWidth + Math.max(0, overflow)}px`;
+    if (overflow <= 0) bar.scrollLeft = 0;
+    card.style.setProperty('--diff-x', `${bar.scrollLeft}px`);
+  };
+  bar.addEventListener('scroll', () => card.style.setProperty('--diff-x', `${bar.scrollLeft}px`));
+  body.addEventListener('wheel', (e) => {
+    const sideways = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+    if (!sideways || bar.hidden) return;
+    bar.scrollLeft += sideways;
+    e.preventDefault();
+  }, { passive: false });
+  const watch = new ResizeObserver(() => (card.isConnected ? measure() : watch.disconnect()));
+  watch.observe(card);
+  requestAnimationFrame(measure);
+  return bar;
+}
+
 /**
  * A side's line number and text cells; an empty side is a blank pair.
  * @param {import('./diffparse.js').Cell | null} c
@@ -487,9 +542,12 @@ function cells(c, side) {
   if (!c) return [h('td', `diff-n diff-empty diff-${side}`), h('td', `diff-code diff-empty diff-${side}`)];
   const kind = c.kind === 'context' ? '' : ` diff-${c.kind}`;
   const code = h('td', `diff-code diff-${side}${kind}`);
+  // The text sits in a span that the file's scroll bar shifts sideways; the cell clips it.
+  const text = h('span', 'diff-text');
   if (c.parts) {
-    code.append(...c.parts.map((p) => h('span', p.changed ? 'diff-word' : '', p.text)));
-  } else code.textContent = c.text;
+    text.append(...c.parts.map((p) => h('span', p.changed ? 'diff-word' : '', p.text)));
+  } else text.textContent = c.text;
+  code.append(text);
   return [h('td', `diff-n diff-${side}${kind}`, String(c.n)), code];
 }
 
