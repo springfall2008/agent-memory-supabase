@@ -10,8 +10,21 @@ const BOARD = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SHA = /^[0-9a-f]{7,40}$/;
 /** Where "All changes vs main" starts: the first of these that names a commit. */
 const BASES = ['origin/HEAD', 'origin/main', 'main', 'master'];
-/** Before any subcommand: no pager, no colour, no configured diff drivers. */
-const GLOBAL = ['--no-pager', '-c', 'core.pager=cat', '-c', 'color.ui=false', '-c', 'diff.external='];
+/**
+ * Before any subcommand: no pager, no colour, no configured diff drivers, and no signature checks. Workers can write
+ * the workspace's .git/config, and `log.showSignature` with `gpg.program` would otherwise run a program of theirs.
+ */
+const GLOBAL = [
+  '--no-pager',
+  '-c',
+  'core.pager=cat',
+  '-c',
+  'color.ui=false',
+  '-c',
+  'diff.external=',
+  '-c',
+  'log.showSignature=false',
+];
 
 export type GitResult = { code: number; out: Uint8Array; timedOut: boolean };
 export type GitRunner = (cwd: string, args: string[], timeoutMs: number) => Promise<GitResult>;
@@ -25,7 +38,8 @@ export const gitRunner: GitRunner = async (cwd, args, timeoutMs) => {
     stdin: 'null',
     stdout: 'piped',
     stderr: 'null',
-    env: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+    // No prompts, no lock files, and no fetch from a promisor remote the repository's config chooses.
+    env: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' },
   }).spawn();
   let timedOut = false;
   const timer = setTimeout(() => {

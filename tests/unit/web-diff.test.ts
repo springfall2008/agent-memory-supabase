@@ -95,7 +95,7 @@ Deno.test('serveDiff shows one commit with the safety flags, in the recorded wor
     });
     const show = calls.find((c) => c.args.includes('show'))!;
     assertEquals(show.cwd, ws);
-    for (const flag of ['--no-pager', '--no-ext-diff', '--no-textconv', 'core.pager=cat']) {
+    for (const flag of ['--no-pager', '--no-ext-diff', '--no-textconv', 'core.pager=cat', 'log.showSignature=false']) {
       assert(show.args.includes(flag), flag);
     }
     assertEquals(show.args[show.args.length - 1], SHA);
@@ -170,5 +170,41 @@ Deno.test('the server routes GET /diff/ to the diff reader and refuses other met
     const p = await handle(new Request(`http://localhost:8787/diff/toy/${SHA}`, { method: 'POST', headers }), deps);
     assertEquals(p.status, 405);
     await p.body?.cancel();
+  });
+});
+
+Deno.test('git never runs the gpg program a repository configures, even for a signed commit', async () => {
+  await withHome(async (home, ws) => {
+    const git = (...args: string[]) => new Deno.Command('git', { args: ['-C', ws, ...args] }).output();
+    const marker = `${ws}/gpg-ran`;
+    const script = `${ws}/fake-gpg.sh`;
+    await Deno.writeTextFile(script, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'gpg.program', script);
+    await git('config', 'log.showSignature', 'true');
+    // A commit with a gpgsig header, written directly so no real signing is needed.
+    const tree = new TextDecoder().decode((await git('write-tree')).stdout).trim();
+    const raw = `tree ${tree}\nauthor t <t@example.invalid> 0 +0000\ncommitter t <t@example.invalid> 0 +0000\n` +
+      'gpgsig -----BEGIN PGP SIGNATURE-----\n \n -----END PGP SIGNATURE-----\n\nsigned\n';
+    const p = new Deno.Command('git', {
+      args: ['-C', ws, 'hash-object', '-t', 'commit', '-w', '--stdin'],
+      stdin: 'piped',
+      stdout: 'piped',
+    })
+      .spawn();
+    const w = p.stdin.getWriter();
+    await w.write(enc(raw));
+    await w.close();
+    const sha = new TextDecoder().decode((await p.output()).stdout).trim().slice(0, 8);
+    await Deno.writeTextFile(`${home}/toy/state.json`, JSON.stringify({ workspace: ws }));
+    // The control: plain git show does run the configured program.
+    await git('show', sha);
+    const control = await Deno.stat(marker).then(() => true, () => false);
+    await Deno.remove(marker).catch(() => {});
+    const r = await get(`/diff/toy/${sha}`, home, gitRunner);
+    assertEquals(r.status, 200);
+    await r.json();
+    assertEquals(await Deno.stat(marker).then(() => true, () => false), false, 'the diff route ran gpg.program');
+    assert(control, 'control: git show without the flag should have run gpg.program');
   });
 });
