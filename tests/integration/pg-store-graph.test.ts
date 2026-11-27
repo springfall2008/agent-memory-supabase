@@ -61,6 +61,23 @@ Deno.test('graph returns matching nodes oldest first with every link among them'
     assertEquals([n.scope, n.category, n.snippet, n.content], [w.alpha.name, 'other', 'intent', undefined]);
     assertEquals(n.tags.includes('kind:intent'), true);
     assertEquals(typeof n.createdAt, 'string');
+    assertEquals(n.updatedAt, undefined);
+  }));
+
+Deno.test('graph gives updatedAt only when asked, and it moves when the content changes', () =>
+  withWorld(async (w, _a, mk) => {
+    const s = mk(w.rw.id);
+    const tag = freshTag();
+    // The limit line sits past the snippet, so only updatedAt shows the edit.
+    const head = `Goal: ${'x'.repeat(200)}`;
+    const goal = await s.store(w.alpha.name, req(`${head}\nMax intents: 20`, [tag, 'kind:goal']));
+    const before = (await s.graph({ tagsAll: [tag], withUpdatedAt: true })).nodes[0];
+    assertEquals(before.updatedAt, goal.updatedAt);
+    await s.update(goal.id, { content: `${head}\nMax intents: 30` });
+    const after = (await s.graph({ tagsAll: [tag], withUpdatedAt: true })).nodes[0];
+    assertEquals(after.snippet, before.snippet);
+    assertEquals(typeof after.updatedAt, 'string');
+    assertEquals(after.updatedAt !== before.updatedAt, true);
   }));
 
 Deno.test('graph short gives 160-character snippets; full gives content and caps at 100', () =>

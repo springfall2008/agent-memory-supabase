@@ -212,7 +212,7 @@ Deno.test('GET /graph requires tags_all and passes the filters', async () => {
   assertEquals(await r.json(), EMPTY_GRAPH);
   assertEquals(s.calls, [{
     fn: 'graph',
-    args: [{ tagsAll: ['board:x', 'kind:goal'], scopes: ['a'], detail: 'full' }],
+    args: [{ tagsAll: ['board:x', 'kind:goal'], scopes: ['a'], detail: 'full', withUpdatedAt: true }],
   }]);
 });
 
