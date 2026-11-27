@@ -10,6 +10,7 @@ import {
   progressFields,
 } from '../../web/public/facts.js';
 import { diffGraph } from '../../web/public/diff.js';
+import { clampDrawerWidth, DRAWER_MIN, GRAPH_MIN, parseStoredWidth } from '../../web/public/resize.js';
 import { formatTokens, inputTotal, runsFor, stripText, totalTitle } from '../../web/public/usage.js';
 import { parseTranscript } from '../../web/public/transcript.js';
 import { connState, nextDelay, POLL_MS, STALE_MS } from '../../web/public/poll.js';
@@ -810,6 +811,21 @@ Deno.test('progressFields reads round, best result, established and open questio
     open: 'does 5 pass?',
   });
   assertEquals(progressFields('nothing'), { round: null, established: null, best: null, open: null });
+});
+
+Deno.test('clampDrawerWidth keeps the drawer wide enough and leaves room for the graph', () => {
+  assertEquals(clampDrawerWidth(500, 1400), 500);
+  assertEquals(clampDrawerWidth(100, 1400), DRAWER_MIN);
+  assertEquals(clampDrawerWidth(1390, 1400), 1400 - GRAPH_MIN);
+  assertEquals(clampDrawerWidth(512.6, 1400), 513);
+  // Too narrow for both: the drawer keeps its minimum, but never more than the page.
+  assertEquals(clampDrawerWidth(900, DRAWER_MIN + 10), DRAWER_MIN);
+  assertEquals(clampDrawerWidth(900, 200), 200);
+});
+
+Deno.test('parseStoredWidth reads only a positive whole number of pixels', () => {
+  assertEquals(parseStoredWidth('640'), 640);
+  for (const bad of [null, '', 'abc', '0', '-5', '12.5', '1e3', ' 640']) assertEquals(parseStoredWidth(bad), null);
 });
 
 Deno.test('formatTokens shortens with k and M, one decimal under ten', () => {
