@@ -161,10 +161,10 @@ def usage_config(env: Mapping[str, str], env_file: Path | None) -> tuple[str, st
     return url, token
 
 
-def http_post(base_url: str, token: str, timeout: float = 5.0) -> Post:
-    """A `post(path, body) -> status` for web-api; 0 means the request never got an HTTP answer."""
+def http_call(base_url: str, token: str, timeout: float = 5.0) -> Callable[[str, dict], tuple[int, dict | None]]:
+    """A `call(path, body) -> (status, JSON reply)` for web-api; status 0 means no HTTP answer at all."""
 
-    def post(path: str, body: dict) -> int:
+    def call(path: str, body: dict) -> tuple[int, dict | None]:
         request = urllib.request.Request(
             base_url + path,
             data=json.dumps(body).encode(),
@@ -173,11 +173,24 @@ def http_post(base_url: str, token: str, timeout: float = 5.0) -> Post:
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                response.read()
-                return response.status
+                return response.status, _json_reply(response.read())
         except urllib.error.HTTPError as exc:
-            return exc.code
+            return exc.code, _json_reply(exc.read())
         except (urllib.error.URLError, OSError, ValueError):
-            return 0
+            return 0, None
 
-    return post
+    return call
+
+
+def _json_reply(raw: bytes) -> dict | None:
+    try:
+        reply = json.loads(raw)
+    except ValueError:
+        return None
+    return reply if isinstance(reply, dict) else None
+
+
+def http_post(base_url: str, token: str, timeout: float = 5.0) -> Post:
+    """A `post(path, body) -> status` for web-api; 0 means the request never got an HTTP answer."""
+    call = http_call(base_url, token, timeout)
+    return lambda path, body: call(path, body)[0]

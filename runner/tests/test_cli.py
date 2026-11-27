@@ -15,8 +15,19 @@ EMPTY_PANE = "● done\n────────\n> \n────────\n
 TYPED_PANE = "● done\n────────\n> hello\n────────\n"
 
 
-def result_json(text: str) -> str:
-    return json.dumps({"type": "result", "result": text, "is_error": False})
+def result_json(text: str, usage: dict | None = None) -> str:
+    record = {"type": "result", "result": text, "is_error": False}
+    if usage is not None:
+        record.update(usage=usage, num_turns=4, duration_ms=900)
+    return json.dumps(record)
+
+
+USAGE = {"input_tokens": 3, "output_tokens": 40, "cache_read_input_tokens": 500, "cache_creation_input_tokens": 60}
+
+
+def assistant_line(msg_id: str, out: int) -> str:
+    usage = {"input_tokens": 1, "output_tokens": out, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 2}
+    return json.dumps({"type": "assistant", "message": {"id": msg_id, "model": "claude-opus-5-5", "usage": usage}}) + "\n"
 
 
 class Stop(Exception):
@@ -92,7 +103,8 @@ class Clock:
 class Harness:
     """Drives Runner.run with a fake clock; `script` maps a time to a callback run when the clock passes it."""
 
-    def __init__(self, test, bf, start_text="BOARD-START created g1", alive=False, state=None, ps=None):
+    def __init__(self, test, bf, start_text="BOARD-START created g1", alive=False, state=None, ps=None,
+                 usage_status=200, env=None, fake_usage=True):
         self.test = test
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
@@ -114,6 +126,9 @@ class Harness:
         self.popen_kwargs = []
         self.script = []
         self.steps = 0
+        self.usage_calls = []
+        self.usage_status = usage_status
+        self.worker_usage = None
         self.runner = Runner(
             bf,
             self.home,
@@ -125,7 +140,17 @@ class Harness:
             kill_pid=lambda pid, sig: self.killed_pids.append(pid),
             kill_group=self.kill_group,
             runner_script=Path("/r/board-runner"),
+            # Never the real sender: a test must not reach a real web-api, whatever the environment holds.
+            usage_post=self.usage_post if fake_usage else None,
+            env={} if env is None else env,
         )
+
+    def usage_post(self, path, body):
+        self.usage_calls.append((path, body))
+        return self.usage_status
+
+    def usage_rows(self, role):
+        return [body for path, body in self.usage_calls if path == "/usage" and body["role"] == role]
 
     def kill_group(self, pid, sig):
         self.group_kills.append((pid, sig))
@@ -140,9 +165,12 @@ class Harness:
     def events(self):
         return self.board_dir / "events.jsonl"
 
-    def lead_says(self, text):
+    def lead_says(self, text, transcript=None):
+        event = {"time": "t", "session_id": "s", "text": text}
+        if transcript is not None:
+            event["transcript_path"] = str(transcript)
         with self.events.open("a") as handle:
-            handle.write(json.dumps({"time": "t", "session_id": "s", "text": text}) + "\n")
+            handle.write(json.dumps(event) + "\n")
 
     def at(self, t, fn):
         self.script.append((t, fn))
@@ -151,12 +179,16 @@ class Harness:
     def popen(self, argv, cwd=None, env=None, stdout=None, stderr=None, **kwargs):
         self.popen_kwargs.append((argv, kwargs))
         is_worker = "-p" in argv and argv[argv.index("-p") + 1].startswith("/blackboard work")
+        is_release = "-p" in argv and argv[argv.index("-p") + 1].startswith("/blackboard release")
         if is_worker and stdout is not None:
             text = self.worker_texts.pop(0) if self.worker_texts else "BOARD-WORK none"
             if isinstance(text, bytes):
                 stdout.buffer.write(text)
             else:
-                stdout.write(result_json(text))
+                stdout.write(result_json(text, self.worker_usage))
+            stdout.flush()
+        if is_release and stdout not in (None, subprocess.DEVNULL):
+            stdout.write(result_json("released", USAGE))
             stdout.flush()
         proc = FakeProc(argv, self.clock.now + (self.worker_seconds if is_worker else 1), self.clock)
         self.procs.append(proc)
@@ -543,3 +575,132 @@ class MainTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageTest(unittest.TestCase):
+    def harness(self, **kwargs):
+        bf = kwargs.pop("bf", None) or board(workers=(WorkerSlot("haiku", 120),))
+        h = Harness(self, bf, **kwargs)
+        self.addCleanup(h.close)
+        return h
+
+    def run_one_worker(self, h, text="BOARD-WORK fact confirmed intent=i1"):
+        h.worker_texts = [text]
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        return h.runner.run(takeover=False)
+
+    def test_a_finished_worker_sends_its_counts(self):
+        h = self.harness()
+        h.worker_usage = USAGE
+        self.assertEqual(self.run_one_worker(h), 0)
+        [row] = h.usage_rows("worker")
+        self.assertEqual(row["scope"], "s")
+        self.assertEqual(row["board"], "b")
+        self.assertTrue(row["runLabel"].startswith("board-b-"))
+        self.assertEqual((row["intentId"], row["outcome"], row["runnerModel"]), ("i1", "fact confirmed", "haiku"))
+        self.assertEqual(row["tokens"], {"input": 3, "output": 40, "cacheRead": 500, "cacheWrite": 60})
+        self.assertEqual((row["turns"], row["durationMs"]), (4, 900))
+        self.assertRegex(row["startedAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertRegex(row["endedAt"], r"^\d{4}-\d{2}-\d{2}T")
+        self.assertEqual((h.board_dir / "usage-pending.jsonl").read_text(), "")
+
+    def test_a_worker_without_a_result_line_sends_the_summed_messages(self):
+        h = self.harness()
+        self.run_one_worker(h, (assistant_line("m1", 5) + assistant_line("m1", 5) + assistant_line("m2", 7)).encode())
+        [row] = h.usage_rows("worker")
+        self.assertEqual(row["tokens"], {"input": 2, "output": 12, "cacheRead": 20, "cacheWrite": 4})
+        self.assertEqual((row["outcome"], row["intentId"], row["turns"]), ("lost", None, None))
+
+    def test_a_worker_with_an_empty_transcript_sends_nothing(self):
+        h = self.harness()
+        self.run_one_worker(h, b"")
+        self.assertEqual(h.usage_rows("worker"), [])
+
+    def test_an_orphan_left_by_a_crash_is_counted_at_start(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        transcript = Path(tmp.name) / "0-board-b-dead.jsonl"
+        transcript.write_text(result_json("x\nBOARD-WORK fact refuted intent=i9", USAGE))
+        state = {"lead_session_id": "s", "lead_label": "L", "workers": {"0": {
+            "pid": 12, "label": "board-b-dead", "started_at": 1795766803.5, "path": str(transcript), "model": "opus"}}}
+        h = self.harness(state=state, ps={12: "claude -p /blackboard work b label=board-b-dead runner"})
+        h.at(5, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        [row] = h.usage_rows("worker")
+        self.assertEqual((row["runLabel"], row["outcome"], row["intentId"]), ("board-b-dead", "fact refuted", "i9"))
+        self.assertEqual(row["runnerModel"], "opus")
+        self.assertEqual(row["tokens"]["output"], 40)
+
+    def test_the_start_and_release_one_shots_are_counted(self):
+        bf = board(workers=(WorkerSlot("haiku", 1),))
+        h = self.harness(bf=bf)
+        h.worker_seconds = 10_000
+        h.at(5, lambda: h.lead_says("BOARD-LEAD running free=1 open=1"))
+        h.at(200, lambda: h.lead_says("BOARD-LEAD done"))
+        h.runner.run(takeover=False)
+        [start] = h.usage_rows("start")
+        self.assertRegex(start["runLabel"], r"^board-b-start-[0-9a-f]{4}$")
+        [release] = h.usage_rows("release")
+        self.assertRegex(release["runLabel"], r"^board-b-release-[0-9a-f]{4}$")
+        self.assertEqual(release["tokens"]["output"], 40)
+        self.assertEqual(list((h.board_dir / "oneshots").iterdir()), [])
+
+    def test_the_lead_row_is_replaced_with_growing_totals(self):
+        h = self.harness()
+        transcript = h.home / "lead.jsonl"
+
+        def turn(text, lines):
+            with transcript.open("a") as f:
+                f.write(lines)
+            h.lead_says(text, transcript)
+
+        h.at(5, lambda: turn("BOARD-LEAD running free=1 open=1", assistant_line("a1", 5)))
+        h.at(200, lambda: turn("BOARD-LEAD done", assistant_line("a2", 7)))
+        h.runner.run(takeover=False)
+        leads = h.usage_rows("lead")
+        self.assertGreaterEqual(len(leads), 2)
+        self.assertEqual(len({r["runLabel"] for r in leads}), 1, "one lead row, replaced each turn")
+        self.assertTrue(leads[0]["runLabel"].startswith("board-b-lead-"))
+        self.assertEqual(leads[0]["tokens"]["output"], 5)
+        self.assertEqual(leads[-1]["tokens"]["output"], 12)
+        self.assertEqual((leads[-1]["intentId"], leads[-1]["outcome"], leads[-1]["runnerModel"]), (None, None, "opus"))
+
+    def test_an_unreachable_route_keeps_the_rows_and_the_board_runs(self):
+        h = self.harness(usage_status=404)
+        h.worker_usage = USAGE
+        self.assertEqual(self.run_one_worker(h), 0)
+        pending = [json.loads(line) for line in (h.board_dir / "usage-pending.jsonl").read_text().splitlines()]
+        self.assertEqual({r["role"] for r in pending}, {"start", "worker"})
+
+    def test_without_credentials_rows_are_queued_with_one_warning(self):
+        h = self.harness(fake_usage=False, env={})
+        err = io.StringIO()
+        h.runner.err = err
+        self.run_one_worker(h)
+        self.assertEqual(err.getvalue().count("token usage is queued but not sent"), 1)
+        pending = (h.board_dir / "usage-pending.jsonl").read_text().splitlines()
+        self.assertEqual(len(pending), 2)
+
+
+class ForgetUsageTest(unittest.TestCase):
+    def test_forget_usage_posts_the_board_to_the_delete_route(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ws = Path(tmp.name)
+        path = ws / "board.toml"
+        path.write_text(f'board = "toy-x"\nscope = "s"\nworkspace = "{ws}"\ngoal = "g"\ndone_when = "d"\nrules = "r"\n[[worker]]\nmodel = "haiku"\n')
+        calls = []
+
+        def fake_call(base, token, timeout=5.0):
+            def call(p, body):
+                calls.append((base, token, p, body))
+                return 200, {"deleted": 3}
+            return call
+
+        out = io.StringIO()
+        env = {"AGENT_MEMORY_TOKEN": "t", "WEB_API_URL": "https://h.example/functions/v1/web-api"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("board_runner.cli.http_call", fake_call), mock.patch("sys.stdout", out):
+            self.assertEqual(main(["forget-usage", str(path)]), 0)
+        self.assertEqual(calls, [("https://h.example/functions/v1/web-api", "t", "/usage/delete", {"scope": "s", "board": "toy-x"})])
+        self.assertIn("3", out.getvalue())

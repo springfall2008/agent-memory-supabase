@@ -48,6 +48,7 @@ class HookTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["session_id"], "s")
         self.assertEqual(events[0]["time"], now())
+        self.assertEqual(events[0]["transcript_path"], str(path))
         self.assertTrue(events[0]["text"].endswith("BOARD-LEAD done"))
 
     def test_text_capped(self):

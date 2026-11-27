@@ -39,9 +39,9 @@ def lead_allow() -> list[str]:
     return [*LEAD_ALLOW, *dir_read_rules(SKILL_DIR)]
 
 
-def new_label(board: str, role: Literal["lead", "worker"]) -> str:
+def new_label(board: str, role: Literal["lead", "worker", "start", "release"]) -> str:
     hex4 = secrets.token_hex(2)
-    return f"board-{board}-lead-{hex4}" if role == "lead" else f"board-{board}-{hex4}"
+    return f"board-{board}-{hex4}" if role == "worker" else f"board-{board}-{role}-{hex4}"
 
 
 def is_ollama(model: str) -> bool:
