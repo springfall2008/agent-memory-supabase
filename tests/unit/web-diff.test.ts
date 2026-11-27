@@ -208,3 +208,35 @@ Deno.test('git never runs the gpg program a repository configures, even for a si
     assert(control, 'control: git show without the flag should have run gpg.program');
   });
 });
+
+Deno.test('serveDiff passes the context as -U, 10 by default, and refuses any other value', async () => {
+  await withHome(async (home, ws) => {
+    await Deno.writeTextFile(`${home}/toy/state.json`, JSON.stringify({ workspace: ws }));
+    const answers = {
+      'cat-file': { out: 'commit\n' },
+      show: { out: 'x' },
+      'rev-parse origin/HEAD^{commit}': { code: 0 },
+      log: { out: '' },
+      diff: { out: 'y' },
+    };
+    for (
+      const [q, flag] of [['', '-U10'], ['&context=3', '-U3'], ['&context=10', '-U10'], ['&context=all', '-U100000']]
+    ) {
+      for (const view of ['commit', 'main']) {
+        const { run, calls } = fakeGit(answers);
+        const r = await get(`/diff/toy/${SHA}?view=${view}${q}`, home, run);
+        assertEquals(r.status, 200, `${view} ${q}`);
+        await r.json();
+        const sub = calls.find((c) => c.args.includes(view === 'commit' ? 'show' : 'diff'))!;
+        assert(sub.args.includes(flag), `${view} ${q}: ${sub.args.join(' ')}`);
+      }
+    }
+    for (const q of ['context=5', 'context=all;x', 'context=']) {
+      const { run, calls } = fakeGit(answers);
+      const r = await get(`/diff/toy/${SHA}?${q}`, home, run);
+      assertEquals(r.status, 400, q);
+      await r.body?.cancel();
+      assertEquals(calls, [], q);
+    }
+  });
+});

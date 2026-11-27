@@ -10,6 +10,8 @@ const BOARD = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SHA = /^[0-9a-f]{7,40}$/;
 /** Where "All changes vs main" starts: the first of these that names a commit. */
 const BASES = ['origin/HEAD', 'origin/main', 'main', 'master'];
+/** Lines of context around each change: the `context` query's only values. `all` is the whole file. */
+const CONTEXT: Record<string, string> = { '3': '-U3', '10': '-U10', all: '-U100000' };
 /**
  * Before any subcommand: no pager, no colour, no configured diff drivers, and no signature checks. Workers can write
  * the workspace's .git/config, and `log.showSignature` with `gpg.program` would otherwise run a program of theirs.
@@ -106,7 +108,11 @@ class Stop extends Error {
 export async function serveDiff(url: URL, runnerHome: string, run: GitRunner = gitRunner): Promise<Response> {
   const parts = url.pathname.split('/').slice(2);
   const view = url.searchParams.get('view') ?? 'commit';
-  if (parts.length !== 2 || !BOARD.test(parts[0]) || !SHA.test(parts[1]) || (view !== 'commit' && view !== 'main')) {
+  const unified = CONTEXT[url.searchParams.get('context') ?? '10'];
+  if (
+    parts.length !== 2 || !BOARD.test(parts[0]) || !SHA.test(parts[1]) || (view !== 'commit' && view !== 'main') ||
+    !Object.hasOwn(CONTEXT, url.searchParams.get('context') ?? '10')
+  ) {
     return json({ error: 'bad request' }, 400);
   }
   const [board, sha] = parts;
@@ -127,7 +133,7 @@ export async function serveDiff(url: URL, runnerHome: string, run: GitRunner = g
     let head = '';
     let body: GitResult;
     if (view === 'commit') {
-      body = await git('show', '--no-ext-diff', '--no-textconv', '--stat', '--patch', '--format=fuller', sha);
+      body = await git('show', '--no-ext-diff', '--no-textconv', '--stat', '--patch', unified, '--format=fuller', sha);
     } else {
       for (const b of BASES) {
         if ((await git('rev-parse', '--verify', '--quiet', `${b}^{commit}`)).code === 0) {
@@ -137,7 +143,7 @@ export async function serveDiff(url: URL, runnerHome: string, run: GitRunner = g
       }
       if (base === null) return json({ error: "No main branch found in this board's workspace" }, 404);
       head = `Commits on top of ${base}:\n${decode((await git('log', '--oneline', `${base}..${sha}`)).out)}\n`;
-      body = await git('diff', '--no-ext-diff', '--no-textconv', '--stat', '--patch', `${base}...${sha}`);
+      body = await git('diff', '--no-ext-diff', '--no-textconv', '--stat', '--patch', unified, `${base}...${sha}`);
     }
     if (body.code !== 0) return json({ error: 'git could not show this commit' }, 500);
     const top = new TextEncoder().encode(head);

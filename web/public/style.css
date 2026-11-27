@@ -937,36 +937,155 @@ button.danger {
   color: var(--text);
 }
 
-.diff-text {
+/* The side-by-side view, like GitHub's split diff: a card per file, old on the left and new on the right. */
+.diff-out {
   flex: 1;
-  margin: 0;
+  min-height: 0;
   overflow: auto;
+}
+
+.diff-head-text {
+  margin: 0 0 8px;
   padding: 6px 8px;
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 12px;
-  line-height: 1.4;
+  white-space: pre-wrap;
 }
 
-.diff-line {
-  white-space: pre;
+.diff-summary {
+  margin: 4px 0 8px;
+  color: var(--muted);
 }
 
-.diff-add {
+.diff-card {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.diff-card-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 4px 4px 0 0;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.diff-path {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.diff-badge {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.diff-count {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.diff-count-add {
   color: var(--ok);
 }
 
-.diff-del {
+.diff-count-del {
   color: var(--bad);
 }
 
-.diff-hunk {
+.diff-card-body {
+  overflow-x: auto;
+}
+
+.diff-card-body > .note,
+.diff-card-body > .drawer-message {
+  margin: 6px 8px;
+}
+
+.diff-split {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.diff-split td {
+  padding: 0 6px;
+  vertical-align: top;
+}
+
+.diff-n {
+  width: 3.5em;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.diff-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-code.diff-left {
+  border-right: 1px solid var(--line);
+}
+
+.diff-del {
+  background: rgb(239 68 68 / 14%);
+}
+
+.diff-add {
+  background: rgb(34 197 94 / 14%);
+}
+
+.diff-del .diff-word {
+  background: rgb(239 68 68 / 40%);
+  border-radius: 2px;
+}
+
+.diff-add .diff-word {
+  background: rgb(34 197 94 / 40%);
+  border-radius: 2px;
+}
+
+.diff-empty {
+  background: rgb(255 255 255 / 3%);
+}
+
+.diff-hunk-row td {
+  padding: 2px 8px;
+  background: rgb(59 130 246 / 12%);
   color: var(--accent);
 }
 
-.diff-file,
-.diff-meta {
-  color: var(--muted);
-  font-weight: 600;
+/* "Full width" on the Diff tab: wider than any dragged width, leaving the graph its minimum. */
+.drawer.drawer-wide {
+  width: calc(100% - 240px) !important;
+  min-width: 0 !important;
+}
+
+.diff-context {
+  margin-left: auto;
 }

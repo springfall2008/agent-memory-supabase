@@ -1,12 +1,13 @@
 // The detail drawer: one memory, with Memory, Links, Worker log and Diff tabs, sliding in over the right of the page.
 import { ApiError, getJson, NOT_SIGNED_IN } from './api.js';
-import { h } from './dom.js';
+import { h, option } from './dom.js';
 import { roundOf } from './bands.js';
 import { builtBefore, citations, foundLine, latestMeasurement, measurementVerdict, progressFields } from './facts.js';
 import { writeSection } from './forms.js';
 import { createLogView } from './logview.js';
 import { kindOf, shortName, verdictOf, workerLabel } from './names.js';
 import { commitOf, githubCommitUrl } from './commits.js';
+import { openCards, parsePatch } from './diffparse.js';
 import { clampDrawerWidth, DRAWER_MIN, KEY_STEP, parseStoredWidth, WIDTH_KEY } from './resize.js';
 import { formatTokens, inputTotal, runsFor } from './usage.js';
 
@@ -244,6 +245,7 @@ export async function openDrawer(id, ctx) {
   ui.panels.log.replaceChildren();
   ui.tabs.diff.hidden = true;
   ui.panels.diff.replaceChildren();
+  ui.root.classList.remove('drawer-wide');
   ui.panels.links.replaceChildren();
   ui.panels.memory.replaceChildren(h('p', 'drawer-message', 'Loading…'));
   ui.tabs.links.textContent = 'Links';
@@ -275,7 +277,9 @@ export async function openDrawer(id, ctx) {
   const commitBoard = memory.tags.find((t) => t.startsWith('board:'))?.slice(6);
   if (commit && commitBoard) {
     ui.tabs.diff.hidden = false;
-    ui.panels.diff.replaceChildren(diffPanel(commitBoard, commit, my));
+    // A conclusion's commit ends the winning branch: open on everything it adds to main.
+    const first = kindOf(memory.tags) === 'conclusion' ? 'main' : 'commit';
+    ui.panels.diff.replaceChildren(diffPanel(commitBoard, commit, my, first));
   }
   selectTab(wanted);
 
@@ -301,42 +305,54 @@ export async function openDrawer(id, ctx) {
   selectTab(wanted);
 }
 
-/** Above this many lines a diff is shown as plain text, not one coloured line per element. */
-const DIFF_COLOUR_LINES = 20000;
+/** A file with more rows than this starts folded: open it from its header. */
+const FOLD_ROWS = 400;
+/** Rows drawn when the diff opens, across all files; later files start folded so a large diff stays responsive. */
+const ROW_BUDGET = 3000;
+
+/** @typedef {'commit' | 'main'} DiffView */
+/** @typedef {'3' | '10' | 'all'} DiffContext */
 
 /**
- * A fact's commit as a diff from the board's workspace on this machine: the commit alone, or everything on top of the
- * base branch. The local server reads the workspace from the board runner's state.
+ * A commit as a side-by-side diff from the board's workspace on this machine, like GitHub's split view: the message
+ * (or commit list) on top, then one card per file. "This commit" is the commit alone; "All changes vs main" is
+ * everything on top of the base branch, which a conclusion opens on, since its commit ends the winning branch.
  * @param {string} board
  * @param {{ sha: string; branch: string | null }} commit
  * @param {number} my the drawer sequence this panel belongs to
+ * @param {DiffView} first the view it opens on
  */
-function diffPanel(board, commit, my) {
+function diffPanel(board, commit, my, first) {
   const el = h('div', 'diff-panel');
   const head = h('div', 'diff-head');
   head.append(h('span', 'diff-sha', commit.sha), commit.branch ? h('span', 'note', ` on ${commit.branch}`) : '');
-  const views = h('div', 'diff-views');
+  const bar = h('div', 'diff-views');
   const message = h('p', 'drawer-message', 'Loading…');
-  const pre = h('pre', 'diff-text');
-  /** @type {Record<'commit' | 'main', HTMLElement>} */
-  const buttons = {
+  const out = h('div', 'diff-out');
+  /** @type {Record<DiffView, HTMLElement>} */
+  const views = {
     commit: h('button', 'secondary', 'This commit'),
     main: h('button', 'secondary', 'All changes vs main'),
   };
-  let view = /** @type {'commit' | 'main'} */ ('commit');
+  const context = /** @type {HTMLSelectElement} */ (h('select', 'diff-context'));
+  context.setAttribute('aria-label', 'Lines of context');
+  context.append(option('3', '3 lines of context'), option('10', '10 lines of context'), option('all', 'Whole file'));
+  context.value = '10';
+  const wide = h('button', 'secondary diff-wide', 'Full width');
+  let view = first;
   let request = 0;
 
-  async function load(/** @type {'commit' | 'main'} */ v) {
-    view = v;
-    for (const [k, b] of Object.entries(buttons)) b.setAttribute('aria-pressed', String(k === view));
+  async function load() {
+    for (const [k, b] of Object.entries(views)) b.setAttribute('aria-pressed', String(k === view));
     const mine = ++request;
     message.hidden = false;
     message.className = 'drawer-message';
     message.textContent = 'Loading…';
-    pre.replaceChildren();
+    out.replaceChildren();
     let body;
     try {
-      const res = await fetch(`/diff/${encodeURIComponent(board)}/${commit.sha}?view=${v}`);
+      const q = new URLSearchParams({ view, context: context.value });
+      const res = await fetch(`/diff/${encodeURIComponent(board)}/${commit.sha}?${q}`);
       body = await res.json();
       if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${res.status}`);
     } catch (e) {
@@ -348,45 +364,133 @@ function diffPanel(board, commit, my) {
     }
     if (mine !== request || my !== seq) return;
     message.hidden = !body.truncated;
-    message.textContent = body.truncated ? 'Cut short: the diff is larger than 2 MB.' : '';
-    drawDiff(pre, body.text);
+    message.textContent = body.truncated
+      ? 'Cut short: the diff is larger than 2 MB, so the last file is incomplete.'
+      : '';
+    out.replaceChildren(...splitDiff(body.text, body.truncated === true));
   }
 
-  for (const [k, b] of Object.entries(buttons)) {
+  for (const [k, b] of Object.entries(views)) {
     b.setAttribute('type', 'button');
-    b.addEventListener('click', () => load(/** @type {'commit' | 'main'} */ (k)));
-    views.append(b);
+    b.addEventListener('click', () => {
+      view = /** @type {DiffView} */ (k);
+      load();
+    });
   }
-  el.append(head, views, message, pre);
-  load('commit');
+  context.addEventListener('change', () => load());
+  wide.setAttribute('type', 'button');
+  wide.setAttribute('aria-pressed', String(!!ui?.root.classList.contains('drawer-wide')));
+  wide.addEventListener('click', () => {
+    const on = !ui?.root.classList.contains('drawer-wide');
+    ui?.root.classList.toggle('drawer-wide', on);
+    wide.setAttribute('aria-pressed', String(on));
+    wide.textContent = on ? 'Back to my width' : 'Full width';
+  });
+  bar.append(views.commit, views.main, context, wide);
+  el.append(head, bar, message, out);
+  load();
   return el;
 }
 
 /**
- * Draw diff text into `pre`: added lines green, removed red, hunk headers blue. Text only, never HTML.
- * @param {HTMLElement} pre
+ * The patch as GitHub's split view: the head text (message, commit list, stat), then a card per file.
  * @param {string} text
+ * @param {boolean} truncated the server cut the text short
+ * @returns {HTMLElement[]}
  */
-function drawDiff(pre, text) {
-  const lines = text.split('\n');
-  if (lines.length > DIFF_COLOUR_LINES) {
-    pre.textContent = text;
-    return;
+function splitDiff(text, truncated) {
+  const { head, files } = parsePatch(text, truncated);
+  const open = openCards(files, FOLD_ROWS, ROW_BUDGET);
+  const nodes = [];
+  if (head.trim()) nodes.push(h('pre', 'diff-head-text', head));
+  if (files.length === 0) nodes.push(h('p', 'drawer-message', 'No file changes.'));
+  const adds = files.reduce((n, f) => n + f.adds, 0);
+  const dels = files.reduce((n, f) => n + f.dels, 0);
+  if (files.length) {
+    nodes.push(
+      h('p', 'diff-summary', `${files.length} file${files.length === 1 ? '' : 's'} changed, +${adds} −${dels}`),
+    );
   }
-  pre.append(...lines.map((line) => {
-    const cls = line.startsWith('+++') || line.startsWith('---')
-      ? 'diff-file'
-      : line.startsWith('+')
-      ? 'diff-add'
-      : line.startsWith('-')
-      ? 'diff-del'
-      : line.startsWith('@@')
-      ? 'diff-hunk'
-      : line.startsWith('diff --git') || line.startsWith('commit ')
-      ? 'diff-meta'
-      : '';
-    return h('span', cls ? `diff-line ${cls}` : 'diff-line', `${line}\n`);
-  }));
+  files.forEach((f, i) => nodes.push(fileCard(f, open[i])));
+  return nodes;
+}
+
+/**
+ * @param {import('./diffparse.js').DiffFile} f
+ * @param {boolean} startOpen
+ */
+function fileCard(f, startOpen) {
+  const card = h('section', 'diff-card');
+  const header = h('button', 'diff-card-head');
+  header.setAttribute('type', 'button');
+  const rows = f.hunks.reduce((n, hk) => n + hk.rows.length + 1, 0);
+  let open = startOpen;
+  const arrow = h('span', 'diff-arrow', open ? '▾' : '▸');
+  const path = f.status === 'renamed' && f.oldPath !== f.newPath
+    ? `${f.oldPath} → ${f.newPath}`
+    : f.newPath ?? f.oldPath ?? '(unknown file)';
+  const badge = f.status === 'modified' ? '' : f.status;
+  header.append(
+    arrow,
+    h('span', 'diff-path', path),
+    badge ? h('span', `diff-badge diff-badge-${f.status}`, badge) : '',
+    h('span', 'diff-count diff-count-add', `+${f.adds}`),
+    h('span', 'diff-count diff-count-del', `−${f.dels}`),
+  );
+  const body = h('div', 'diff-card-body');
+  const fill = () => {
+    if (body.childElementCount) return;
+    if (f.status === 'binary') body.append(h('p', 'note', 'Binary file: not shown.'));
+    else if (f.hunks.length === 0) body.append(h('p', 'note', 'No line changes.'));
+    else body.append(splitTable(f));
+    if (f.incomplete) body.append(h('p', 'drawer-message error', 'This file is cut short.'));
+  };
+  if (open) fill();
+  else body.hidden = true;
+  if (!open) header.title = `${rows} lines: open to show`;
+  header.addEventListener('click', () => {
+    open = !open;
+    if (open) fill();
+    body.hidden = !open;
+    arrow.textContent = open ? '▾' : '▸';
+  });
+  card.append(header, body);
+  return card;
+}
+
+/** @param {import('./diffparse.js').DiffFile} f */
+function splitTable(f) {
+  const table = h('table', 'diff-split');
+  const tbody = h('tbody');
+  for (const hk of f.hunks) {
+    const sep = h('tr', 'diff-hunk-row');
+    const td = h('td', '', hk.header);
+    td.setAttribute('colspan', '4');
+    sep.append(td);
+    tbody.append(sep);
+    for (const r of hk.rows) {
+      const tr = h('tr');
+      tr.append(...cells(r.left, 'left'), ...cells(r.right, 'right'));
+      tbody.append(tr);
+    }
+  }
+  table.append(tbody);
+  return table;
+}
+
+/**
+ * A side's line number and text cells; an empty side is a blank pair.
+ * @param {import('./diffparse.js').Cell | null} c
+ * @param {'left' | 'right'} side
+ */
+function cells(c, side) {
+  if (!c) return [h('td', `diff-n diff-empty diff-${side}`), h('td', `diff-code diff-empty diff-${side}`)];
+  const kind = c.kind === 'context' ? '' : ` diff-${c.kind}`;
+  const code = h('td', `diff-code diff-${side}${kind}`);
+  if (c.parts) {
+    code.append(...c.parts.map((p) => h('span', p.changed ? 'diff-word' : '', p.text)));
+  } else code.textContent = c.text;
+  return [h('td', `diff-n diff-${side}${kind}`, String(c.n)), code];
 }
 
 /**
